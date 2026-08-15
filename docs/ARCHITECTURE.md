@@ -87,6 +87,8 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
 
 - **App scaling and viewer zoom**: `scaling` is applied with egui's global zoom factor and affects menus, sidebars, and window chrome. `viewer_zoom` is applied inside a scoped viewer style, so only Markdown typography, spacing, and layout widths change. egui's multiplicative `zoom_delta()` handles native touchpad pinch and Ctrl/Cmd-wheel smoothly; the viewer keeps the pointer's document position stable by proportionally anchoring both scroll axes. A middle-button drag updates the renderer-owned scroll offsets when zoomed in, without selecting text or activating links.
 
+- **Fullscreen toggle**: The unused portion of the top menu/title bar detects a primary-button double-click and sends `ViewportCommand::Fullscreen` with the inverse of the reported native viewport state. The View menu exposes the same toggle. Controls embedded in the bar continue to consume their own pointer interactions, and an unknown initial fullscreen state is treated as windowed.
+
 - **Wide table scrolling**: Wide markdown / HTML tables are wrapped in a nested `egui::ScrollArea::horizontal()` so columns wider than the content area can still be reached. Plain vertical wheel stays with the outer document scroller; table horizontal movement uses the bottom scrollbar, native horizontal input, or `Shift+vertical-wheel` (routed via `forward_shift_wheel_to_horizontal_scroll` in `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs`) so the cursor crossing a wide table during normal scrolling does not change its horizontal offset.
 
 - **Resizable tables**: Markdown and HTML tables use

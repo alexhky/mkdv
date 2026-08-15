@@ -193,6 +193,14 @@ fn content_default_width(full_width_content: bool) -> Option<usize> {
     }
 }
 
+/// Return the next fullscreen state for a title-bar toggle.
+///
+/// The viewport state can be unknown during the first frame (or on a backend
+/// that cannot report it), so an unknown state is treated as windowed.
+fn toggled_fullscreen_state(current: Option<bool>) -> bool {
+    !current.unwrap_or(false)
+}
+
 /// Return the scroll offset that keeps the content under the pointer stable
 /// while the viewer layout changes size.
 fn zoom_anchor_offset(
@@ -1849,6 +1857,12 @@ impl MarkdownApp {
         } else {
             "Markdown Viewer".to_string()
         }
+    }
+
+    /// Toggle borderless fullscreen using the current native viewport state.
+    fn toggle_fullscreen(ctx: &egui::Context) {
+        let target = ctx.input(|i| toggled_fullscreen_state(i.viewport().fullscreen));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(target));
     }
 
     fn is_markdown_file(path: &std::path::Path) -> bool {
@@ -4333,8 +4347,13 @@ impl eframe::App for MarkdownApp {
         // Get ctrl state for link handling
         let ctrl_held = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
-        // Menu bar
+        // Menu bar. The unused area doubles as a lightweight title bar: a
+        // primary-button double-click toggles borderless fullscreen, matching
+        // the familiar desktop window-bar gesture without intercepting menu
+        // and navigation controls.
+        let mut menu_bar_rect = egui::Rect::NOTHING;
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            menu_bar_rect = ui.max_rect();
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
@@ -4572,6 +4591,25 @@ impl eframe::App for MarkdownApp {
                         self.viewer_zoom = 1.0;
                         ui.close();
                     }
+
+                    let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    let fullscreen_text = if fullscreen {
+                        "✓ Fullscreen"
+                    } else {
+                        "Fullscreen"
+                    };
+                    let fullscreen_btn = ui.button(fullscreen_text);
+                    #[cfg(feature = "mcp")]
+                    self.mcp_bridge.register_widget(
+                        "Menu: View → Fullscreen",
+                        "button",
+                        &fullscreen_btn,
+                        Some(if fullscreen { "on" } else { "off" }),
+                    );
+                    if fullscreen_btn.clicked() {
+                        Self::toggle_fullscreen(ctx);
+                        ui.close();
+                    }
                 });
                 #[cfg(feature = "mcp")]
                 self.mcp_bridge
@@ -4655,6 +4693,17 @@ impl eframe::App for MarkdownApp {
                 });
             });
         });
+
+        let title_bar_double_clicked = ctx.input(|i| {
+            i.pointer
+                .button_double_clicked(egui::PointerButton::Primary)
+                && i.pointer
+                    .hover_pos()
+                    .is_some_and(|pointer| menu_bar_rect.contains(pointer))
+        });
+        if title_bar_double_clicked && !ctx.is_using_pointer() {
+            Self::toggle_fullscreen(ctx);
+        }
 
         // Handle navigation button clicks (must be after menu bar UI)
         if go_back {
@@ -4938,6 +4987,17 @@ mod tests {
     #[test]
     fn full_width_content_uses_available_width() {
         assert_eq!(content_default_width(true), None);
+    }
+
+    #[test]
+    fn fullscreen_toggle_enters_from_unknown_or_windowed_state() {
+        assert!(toggled_fullscreen_state(None));
+        assert!(toggled_fullscreen_state(Some(false)));
+    }
+
+    #[test]
+    fn fullscreen_toggle_leaves_fullscreen_state() {
+        assert!(!toggled_fullscreen_state(Some(true)));
     }
 
     #[test]
