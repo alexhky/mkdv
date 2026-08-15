@@ -3181,16 +3181,15 @@ impl MarkdownApp {
                     }
                 }
 
-                // Capture only the small selection-preserving correction used
-                // while the primary button is held. Normal touchpad movement
-                // is left to the renderer so both axes retain their original
-                // gesture vector instead of receiving a second vertical-only
+                // Capture the small selection-preserving correction for
+                // line-based wheel input. Point-unit touchpad movement is left
+                // to the renderer so both axes retain their original gesture
+                // vector instead of receiving a second vertical-only
                 // correction.
-                let (raw_scroll, zoom_modifier_active, primary_down) = ui.ctx().input(|i| {
+                let (raw_scroll, zoom_modifier_active) = ui.ctx().input(|i| {
                     (
                         i.raw_scroll_delta,
                         i.modifiers.matches_any(egui::Modifiers::COMMAND),
-                        i.pointer.primary_down(),
                     )
                 });
                 let previous_scroll_offset = tab.scroll_offset;
@@ -3328,7 +3327,6 @@ impl MarkdownApp {
                 if raw_scroll.y.abs() > 0.0
                     && pointer_over_content
                     && !zoom_modifier_active
-                    && primary_down
                     && !(pending_touchpad_scroll_only && pending_touchpad_scroll.length_sq() > 0.0)
                 {
                     let current_offset = scroll_output.state.offset.y;
