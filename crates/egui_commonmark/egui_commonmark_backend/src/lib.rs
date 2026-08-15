@@ -31,7 +31,7 @@ pub use {
 pub use misc::CommonMarkCache;
 
 #[cfg(feature = "math")]
-pub use misc::render_math;
+pub use misc::{render_math, render_math_scaled};
 
 #[cfg(feature = "math")]
 pub use misc::warm_math_fonts;

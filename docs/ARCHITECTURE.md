@@ -12,7 +12,8 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
   - `tabs: Vec<Tab>` - list of open tabs
   - `active_tab: usize` - index of the currently active tab
   - `dark_mode: bool` - global theme setting
-  - `zoom_level: f32` - global zoom (0.5 to 3.0)
+  - `scaling: f32` - global UI scaling (0.5 to 3.0)
+  - `viewer_zoom: f32` - Markdown-only content zoom (0.5 to 3.0)
   - `show_outline: bool` - toggle outline sidebar visibility
   - `full_width_content: bool` - use the full content pane instead of the readable-width cap
   - `show_explorer: bool` - toggle file explorer visibility
@@ -35,7 +36,7 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
   - `document_title: Option<String>` - first h1 used as sidebar title
   - `outline_headers: Vec<Header>` - parsed headers for outline
   - `collapsed_headers: HashSet<usize>` - collapsed outline sections
-  - `scroll_offset`, `pending_scroll_offset`, `last_content_height`, `last_viewport_height` - scroll state
+  - `scroll_offset`, `horizontal_scroll_offset`, `pending_scroll_offset`, `last_content_height`, `last_content_width`, `last_viewport_height` - scroll state
   - `pending_header_click_key`, `correct_active_search_pending` - one-shot precise-scroll correction state
   - `local_links: Vec<String>` - cached local markdown links
   - `history_back`, `history_forward: Vec<PathBuf>` - per-tab navigation history
@@ -44,7 +45,8 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
 
 - **PersistedState**: Serializable struct for session persistence:
   - `dark_mode: Option<bool>`
-  - `zoom_level: Option<f32>`
+  - `scaling: Option<f32>`
+  - `viewer_zoom: Option<f32>`
   - `show_outline: Option<bool>`
   - `full_width_content: Option<bool>`
   - `show_explorer: Option<bool>` - file explorer visibility
@@ -83,6 +85,8 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
 
 - **Keyboard document scrolling**: Plain document scroll keys are handled in `MarkdownApp::update` after mode-specific shortcuts are checked. `KeyboardScrollAction` maps Up/Down to fixed line steps and Page Up/Page Down to viewport-relative page steps through `keyboard_scroll_target`, which clamps against the active tab's `last_content_height`. The chosen target is assigned to the tab's `pending_scroll_offset`, so keyboard scrolling uses the same renderer-owned `ScrollArea` pipeline as outline and search jumps. Arrow keys are reserved for search-result navigation while the find bar is open, and document scrolling ignores Ctrl/Alt/Command-modified keypresses so it does not steal existing shortcuts.
 
+- **App scaling and viewer zoom**: `scaling` is applied with egui's global zoom factor and affects menus, sidebars, and window chrome. `viewer_zoom` is applied inside a scoped viewer style, so only Markdown typography, spacing, and layout widths change. egui's multiplicative `zoom_delta()` handles native touchpad pinch and Ctrl/Cmd-wheel smoothly; the viewer keeps the pointer's document position stable by proportionally anchoring both scroll axes. A middle-button drag updates the renderer-owned scroll offsets when zoomed in, without selecting text or activating links.
+
 - **Wide table scrolling**: Wide markdown / HTML tables are wrapped in a nested `egui::ScrollArea::horizontal()` so columns wider than the content area can still be reached. Plain vertical wheel stays with the outer document scroller; table horizontal movement uses the bottom scrollbar, native horizontal input, or `Shift+vertical-wheel` (routed via `forward_shift_wheel_to_horizontal_scroll` in `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs`) so the cursor crossing a wide table during normal scrolling does not change its horizontal offset.
 
 - **Resizable tables**: Markdown and HTML tables use
@@ -112,7 +116,7 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
 ```
 update() → check_file_changes() → reload affected tabs
          → poll pending GVFS scan and active animations
-         → Apply theme, zoom settings
+         → Apply theme, app scaling
          → TopBottomPanel (menu bar + LIVE indicator + file path)
          → TopBottomPanel (error bar, if any)
          → TopBottomPanel (tab bar) → render_tab_bar()
@@ -120,12 +124,13 @@ update() → check_file_changes() → reload affected tabs
            → render_tree_node() (recursive)
          → CentralPanel → render_tab_content()
            → SidePanel::right (outline, if show_outline && headers exist)
-           → ScrollArea::show_viewport → CommonMarkViewer
+           → CommonMarkViewer::show_scrollable (viewer zoom + middle-button pan)
            → check_link_hooks() → handle navigation
          → Lightbox and drag-and-drop overlays
 ```
 
-Uses `show_viewport` for optimized rendering - egui clips content outside the visible area.
+The renderer owns the document `ScrollArea` through `show_scrollable`; it
+keeps the scroll state and layout cache aligned with viewer zoom and panning.
 
 ## Custom Tab System
 

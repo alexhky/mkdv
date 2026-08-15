@@ -34,7 +34,7 @@ A fast, lightweight desktop Markdown viewer built with Rust and egui. Designed f
 
 ### View
 - **Dark & Light Themes** - Toggle with Ctrl+D
-- **Zoom** - 50% to 300% zoom (Ctrl++/-/0 or Ctrl+Scroll)
+- **Scaling & Viewer Zoom** - Ctrl++/-/0 changes whole-app scaling; pinch or Ctrl+Scroll zooms the Markdown viewer only. Middle-drag pans the page while viewer zoom is above 100%
 - **Keyboard Scrolling** - Scroll documents with ↑/↓ by line or Page Up/Page Down by page when the find bar is closed
 - **Live Reload** - Auto-refresh on file changes (enabled by default)
 
@@ -42,7 +42,7 @@ A fast, lightweight desktop Markdown viewer built with Rust and egui. Designed f
 - **Drag and Drop** - Drop markdown files onto the window to open
 - **Native Dialogs** - System file and folder picker integration
 - **Welcome Page & Recent Files** - Open files or folders from the idle screen and reopen recent documents
-- **Session Persistence** - Remembers open tabs, theme, zoom, and sidebar state
+- **Session Persistence** - Remembers open tabs, theme, app scaling, viewer zoom, and sidebar state
 - **Cross-Platform** - Linux, macOS, and Windows support; native X11 and Wayland support on Linux
 
 ## Screenshots
@@ -130,12 +130,14 @@ A fast, lightweight desktop Markdown viewer built with Rust and egui. Designed f
 | Ctrl+D | Toggle dark/light mode |
 | Ctrl+Shift+E | Toggle file explorer |
 | Ctrl+Shift+O | Toggle outline sidebar |
-| Ctrl++ / Ctrl+= | Zoom in |
-| Ctrl+- | Zoom out |
-| Ctrl+0 | Reset zoom to 100% |
+| Ctrl++ / Ctrl+= | Increase whole-app scaling |
+| Ctrl+- | Decrease whole-app scaling |
+| Ctrl+0 | Reset whole-app scaling to 100% |
 | ↑ / ↓ (when find bar is closed) | Scroll document up/down by line |
 | Page Up / Page Down | Scroll document up/down by page |
-| Ctrl+Scroll | Zoom with mouse wheel |
+| Touchpad pinch over viewer | Smoothly zoom the Markdown viewer |
+| Ctrl+Scroll over viewer | Zoom the Markdown viewer |
+| Middle-drag over viewer | Pan the zoomed viewer page |
 | Shift+Scroll over a wide table | Scroll the table horizontally |
 
 ### File Operations

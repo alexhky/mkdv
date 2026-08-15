@@ -135,6 +135,10 @@ const SYSTEM_FONT_PATHS: &[(&str, &str)] = &[
 ];
 const MAX_WATCHER_RETRIES: u32 = 3;
 const FLASH_DURATION_MS: u64 = 600;
+const MIN_SCALING: f32 = 0.5;
+const MAX_SCALING: f32 = 3.0;
+const MIN_VIEWER_ZOOM: f32 = 0.5;
+const MAX_VIEWER_ZOOM: f32 = 3.0;
 
 // Optimal widths for initial window sizing (based on typography research)
 // Content: 600px optimal for 55-75 CPL readability
@@ -187,6 +191,59 @@ fn content_default_width(full_width_content: bool) -> Option<usize> {
     } else {
         Some(CONTENT_OPTIMAL_WIDTH as usize)
     }
+}
+
+/// Return the scroll offset that keeps the content under the pointer stable
+/// while the viewer layout changes size.
+fn zoom_anchor_offset(
+    old_offset: f32,
+    old_content_size: f32,
+    new_content_size: f32,
+    pointer_offset: f32,
+    max_offset: f32,
+) -> f32 {
+    if old_content_size <= f32::EPSILON || !old_content_size.is_finite() {
+        return old_offset.clamp(0.0, max_offset.max(0.0));
+    }
+
+    let old_content_position = old_offset + pointer_offset.max(0.0);
+    let new_content_position = old_content_position / old_content_size * new_content_size;
+    (new_content_position - pointer_offset).clamp(0.0, max_offset.max(0.0))
+}
+
+/// Scale only the markdown viewer's local widget style. The surrounding menu,
+/// sidebars, and window chrome keep the app-level `scaling` unchanged.
+fn scale_viewer_style(ui: &mut egui::Ui, scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+
+    let style = ui.style_mut();
+    for font in style.text_styles.values_mut() {
+        font.size *= scale;
+    }
+
+    let spacing = &mut style.spacing;
+    spacing.item_spacing *= scale;
+    spacing.button_padding *= scale;
+    spacing.indent *= scale;
+    spacing.interact_size *= scale;
+    spacing.slider_width *= scale;
+    spacing.slider_rail_height *= scale;
+    spacing.combo_width *= scale;
+    spacing.text_edit_width *= scale;
+    spacing.icon_width *= scale;
+    spacing.icon_width_inner *= scale;
+    spacing.icon_spacing *= scale;
+    spacing.default_area_size *= scale;
+    spacing.tooltip_width *= scale;
+    spacing.menu_width *= scale;
+    spacing.menu_spacing *= scale;
+    spacing.combo_height *= scale;
+    spacing.scroll.bar_width *= scale;
+    spacing.scroll.handle_min_length *= scale;
+    spacing.scroll.bar_inner_margin *= scale;
+    spacing.scroll.bar_outer_margin *= scale;
 }
 
 /// A recently opened file, for the welcome page's "Recent" list.
@@ -242,7 +299,8 @@ fn format_relative_time(epoch_secs: u64, now: u64) -> String {
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedState {
     dark_mode: Option<bool>,
-    zoom_level: Option<f32>,
+    scaling: Option<f32>,
+    viewer_zoom: Option<f32>,
     show_outline: Option<bool>,
     full_width_content: Option<bool>,
     open_tabs: Option<Vec<PathBuf>>,
@@ -722,7 +780,9 @@ struct Tab {
     /// Set of header indices that are collapsed in the outline
     collapsed_headers: HashSet<usize>,
     scroll_offset: f32,
+    horizontal_scroll_offset: f32,
     pending_scroll_offset: Option<f32>,
+    last_content_width: f32,
     /// Composite header-position key (see `header_position_key`) waiting for
     /// a corrective scroll. Set when the outline-click handler used the
     /// line-ratio fallback because the cache didn't yet have the precise y
@@ -784,7 +844,9 @@ impl Tab {
             outline_headers: parsed.outline_headers,
             collapsed_headers: HashSet::new(),
             scroll_offset: 0.0,
+            horizontal_scroll_offset: 0.0,
             pending_scroll_offset: None,
+            last_content_width: 0.0,
             pending_header_click_key: None,
             correct_active_search_pending: false,
             last_content_height: 0.0,
@@ -853,7 +915,9 @@ impl Tab {
             self.cache = CommonMarkCache::default();
             self.content_version = self.content_version.wrapping_add(1);
             self.scroll_offset = 0.0;
+            self.horizontal_scroll_offset = 0.0;
             self.pending_scroll_offset = None;
+            self.last_content_width = 0.0;
             self.base_uri = Self::compute_base_uri(&self.path);
 
             let parsed = parse_headers(&self.content);
@@ -1543,7 +1607,10 @@ struct MarkdownApp {
     tabs: Vec<Tab>,
     active_tab: usize,
     dark_mode: bool,
-    zoom_level: f32,
+    /// Global egui UI scale. This affects the window chrome and all widgets.
+    scaling: f32,
+    /// Markdown viewer zoom. This is applied only inside the document area.
+    viewer_zoom: f32,
     show_outline: bool,
     full_width_content: bool,
     watch_enabled: bool,
@@ -1583,6 +1650,8 @@ struct MarkdownApp {
     lightbox_scroll: f32,
     // Counter for unique lightbox IDs (prevents stale egui state between opens)
     lightbox_open_count: u64,
+    /// True after a middle-button press began over the markdown viewer.
+    middle_pan_active: bool,
     // Find-bar state (current-document search)
     search: SearchState,
     // Recently opened files (most-recent first), shown on the welcome page
@@ -1604,7 +1673,8 @@ impl MarkdownApp {
         // loads it if present. This purges the old blob so it doesn't waste startup time/RAM.
         cc.egui_ctx.memory_mut(|mem| mem.data = Default::default());
 
-        // Disable egui's built-in Ctrl+/- zoom — we handle zoom ourselves
+        // Disable egui's built-in Ctrl+/- scaling — we persist and apply the
+        // app-level scaling explicitly, while viewer zoom has separate input.
         cc.egui_ctx
             .options_mut(|opt| opt.zoom_with_keyboard = false);
 
@@ -1642,7 +1712,14 @@ impl MarkdownApp {
         let dark_mode = persisted
             .dark_mode
             .unwrap_or_else(|| cc.egui_ctx.style().visuals.dark_mode);
-        let zoom_level = persisted.zoom_level.unwrap_or(1.0).clamp(0.5, 3.0);
+        let scaling = persisted
+            .scaling
+            .unwrap_or(1.0)
+            .clamp(MIN_SCALING, MAX_SCALING);
+        let viewer_zoom = persisted
+            .viewer_zoom
+            .unwrap_or(1.0)
+            .clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM);
         let show_outline = persisted.show_outline.unwrap_or(true);
         let full_width_content = persisted.full_width_content.unwrap_or(false);
         let show_explorer = persisted.show_explorer.unwrap_or(true);
@@ -1717,7 +1794,8 @@ impl MarkdownApp {
             tabs,
             active_tab,
             dark_mode,
-            zoom_level,
+            scaling,
+            viewer_zoom,
             show_outline,
             full_width_content,
             watch_enabled: watch,
@@ -1741,6 +1819,7 @@ impl MarkdownApp {
             lightbox: None,
             lightbox_scroll: 0.0,
             lightbox_open_count: 0,
+            middle_pan_active: false,
             search: SearchState::default(),
             recent_files: persisted.recent_files.unwrap_or_default(),
             welcome_show_all: false,
@@ -2979,6 +3058,11 @@ impl MarkdownApp {
 
     fn render_tab_content(&mut self, ui: &mut egui::Ui, ctrl_held: bool) -> Option<PathBuf> {
         let mut open_in_new_tab: Option<PathBuf> = None;
+        let viewer_zoom_before = self.viewer_zoom;
+        let mut viewer_zoom = viewer_zoom_before;
+        let mut zoom_anchor: Option<(egui::Pos2, f32, f32)> = None;
+        let mut middle_pan_active = self.middle_pan_active;
+        let lightbox_open = self.lightbox.is_some();
 
         // Snapshot search state before taking a mutable borrow on the active tab
         let search_is_open = self.search.is_open;
@@ -3016,9 +3100,38 @@ impl MarkdownApp {
                 ..Default::default()
             })
             .show(ui, |ui| {
-                // Capture scroll input for manual handling during selection
-                let raw_scroll = ui.ctx().input(|i| i.raw_scroll_delta.y);
                 let content_rect = ui.available_rect_before_wrap();
+                let pointer_pos = ui.ctx().input(|i| i.pointer.hover_pos());
+                let pointer_over_content =
+                    !lightbox_open && pointer_pos.is_some_and(|pos| content_rect.contains(pos));
+                let zoom_input = ui.ctx().input(|i| {
+                    if pointer_over_content {
+                        i.zoom_delta()
+                    } else {
+                        1.0
+                    }
+                });
+                if pointer_over_content && (zoom_input - 1.0).abs() > f32::EPSILON {
+                    let new_zoom =
+                        (viewer_zoom_before * zoom_input).clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM);
+                    if (new_zoom - viewer_zoom_before).abs() > f32::EPSILON {
+                        viewer_zoom = new_zoom;
+                        zoom_anchor = pointer_pos.map(|pos| (pos, viewer_zoom_before, new_zoom));
+                    }
+                }
+
+                // Capture scroll input for manual handling during selection. Ctrl/Cmd
+                // wheel is classified by egui as zoom input and must not also scroll.
+                let (raw_scroll, zoom_modifier_active) = ui.ctx().input(|i| {
+                    (
+                        i.raw_scroll_delta.y,
+                        i.modifiers.matches_any(egui::Modifiers::COMMAND),
+                    )
+                });
+                let previous_scroll_offset = tab.scroll_offset;
+                let previous_horizontal_scroll_offset = tab.horizontal_scroll_offset;
+                let previous_content_height = tab.last_content_height;
+                let previous_content_width = tab.last_content_width;
 
                 // The renderer owns the ScrollArea now (via show_scrollable),
                 // so we configure scroll_source / pending offset / content
@@ -3027,32 +3140,70 @@ impl MarkdownApp {
                 // selection-preserving wheel hack below.
                 let pending = tab.pending_scroll_offset.take();
                 let default_width = content_default_width(self.full_width_content);
-                let mut scroll_output = CommonMarkViewer::new()
-                    .default_implicit_uri_scheme(&tab.base_uri)
-                    .max_image_width(Some(800))
-                    .default_width(default_width)
-                    .indentation_spaces(2)
-                    .use_strong_font_family(true)
-                    .show_alt_text_on_hover(true)
-                    .syntax_theme_dark("base16-ocean.dark")
-                    .syntax_theme_light("base16-ocean.light")
-                    .line_height(1.5)
-                    .code_line_height(1.3)
-                    .paragraph_spacing(2.0)
-                    .heading_spacing_above(2.0)
-                    .heading_spacing_below(0.75)
-                    .content_version(tab.content_version)
-                    .pending_scroll_offset(pending)
-                    .scroll_source(egui::scroll_area::ScrollSource {
-                        scroll_bar: true,
-                        drag: false,
-                        mouse_wheel: true,
+                let mut scroll_output = ui
+                    .scope(|ui| {
+                        scale_viewer_style(ui, viewer_zoom);
+                        CommonMarkViewer::new()
+                            .default_implicit_uri_scheme(&tab.base_uri)
+                            .max_image_width(Some(800))
+                            .default_width(default_width)
+                            .content_scale(viewer_zoom)
+                            .scroll_axes([true, true])
+                            .indentation_spaces(2)
+                            .use_strong_font_family(true)
+                            .show_alt_text_on_hover(true)
+                            .syntax_theme_dark("base16-ocean.dark")
+                            .syntax_theme_light("base16-ocean.light")
+                            .line_height(1.5)
+                            .code_line_height(1.3)
+                            .paragraph_spacing(2.0)
+                            .heading_spacing_above(2.0)
+                            .heading_spacing_below(0.75)
+                            .content_version(tab.content_version)
+                            .pending_scroll_offset(pending)
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                scroll_bar: true,
+                                drag: false,
+                                mouse_wheel: true,
+                            })
+                            .show_scrollable(tab.id, ui, &mut tab.cache, &tab.content)
                     })
-                    .show_scrollable(tab.id, ui, &mut tab.cache, &tab.content);
+                    .inner;
 
                 tab.scroll_offset = scroll_output.state.offset.y;
+                tab.horizontal_scroll_offset = scroll_output.state.offset.x;
                 tab.last_viewport_height = scroll_output.inner_rect.height();
                 tab.last_content_height = scroll_output.content_size.y;
+                tab.last_content_width = scroll_output.content_size.x;
+
+                // Keep the document point beneath the pointer in place while
+                // the re-laid-out viewer changes size. This is the same anchor
+                // behavior users expect from browser zoom.
+                if let Some((pointer, _old_zoom, _new_zoom)) = zoom_anchor {
+                    let pointer_in_viewport = pointer - scroll_output.inner_rect.min;
+                    let max_y =
+                        (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+                    let max_x =
+                        (scroll_output.content_size.x - scroll_output.inner_rect.width()).max(0.0);
+                    scroll_output.state.offset.y = zoom_anchor_offset(
+                        previous_scroll_offset,
+                        previous_content_height,
+                        scroll_output.content_size.y,
+                        pointer_in_viewport.y,
+                        max_y,
+                    );
+                    scroll_output.state.offset.x = zoom_anchor_offset(
+                        previous_horizontal_scroll_offset,
+                        previous_content_width,
+                        scroll_output.content_size.x,
+                        pointer_in_viewport.x,
+                        max_x,
+                    );
+                    scroll_output.state.store(ui.ctx(), scroll_output.id);
+                    tab.scroll_offset = scroll_output.state.offset.y;
+                    tab.horizontal_scroll_offset = scroll_output.state.offset.x;
+                    ui.ctx().request_repaint();
+                }
 
                 // If the renderer recorded an exact y for the active match, check
                 // whether the current scroll position keeps it visible. If not,
@@ -3106,12 +3257,7 @@ impl MarkdownApp {
                 }
 
                 // Manual scroll handling for mouse wheel during text selection
-                let pointer_over_content = ui.ctx().input(|i| {
-                    i.pointer
-                        .hover_pos()
-                        .is_some_and(|pos| content_rect.contains(pos))
-                });
-                if raw_scroll.abs() > 0.0 && pointer_over_content {
+                if raw_scroll.abs() > 0.0 && pointer_over_content && !zoom_modifier_active {
                     let current_offset = scroll_output.state.offset.y;
                     let max_scroll = (tab.last_content_height - content_rect.height()).max(0.0);
                     let new_offset = (current_offset - raw_scroll).clamp(0.0, max_scroll);
@@ -3128,11 +3274,54 @@ impl MarkdownApp {
                     }
                 }
 
+                // Middle-button drag pans the zoomed viewer without selecting
+                // text or activating links. Keep both axes clamped to the
+                // renderer-owned ScrollArea's content bounds.
+                let (middle_down, pointer_delta) = ui
+                    .ctx()
+                    .input(|i| (i.pointer.middle_down(), i.pointer.delta()));
+                if middle_down {
+                    if !middle_pan_active && pointer_over_content {
+                        middle_pan_active = true;
+                    }
+                    if middle_pan_active && viewer_zoom > 1.0 + f32::EPSILON {
+                        let max_x = (scroll_output.content_size.x
+                            - scroll_output.inner_rect.width())
+                        .max(0.0);
+                        let max_y = (scroll_output.content_size.y
+                            - scroll_output.inner_rect.height())
+                        .max(0.0);
+                        let old_offset = scroll_output.state.offset;
+                        scroll_output.state.offset.x =
+                            (old_offset.x - pointer_delta.x).clamp(0.0, max_x);
+                        scroll_output.state.offset.y =
+                            (old_offset.y - pointer_delta.y).clamp(0.0, max_y);
+                        if scroll_output.state.offset != old_offset {
+                            scroll_output.state.store(ui.ctx(), scroll_output.id);
+                            tab.scroll_offset = scroll_output.state.offset.y;
+                            tab.horizontal_scroll_offset = scroll_output.state.offset.x;
+                            ui.ctx().request_repaint();
+                        }
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                } else {
+                    middle_pan_active = false;
+                    if pointer_over_content && viewer_zoom > 1.0 + f32::EPSILON {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    }
+                }
+
                 // Request repaint during smooth scrolling
-                if ui.ctx().input(|i| i.smooth_scroll_delta.length_sq() > 0.0) {
+                if ui.ctx().input(|i| {
+                    i.smooth_scroll_delta.length_sq() > 0.0
+                        || (i.zoom_delta() - 1.0).abs() > f32::EPSILON
+                }) {
                     ui.ctx().request_repaint();
                 }
             });
+
+        self.viewer_zoom = viewer_zoom;
+        self.middle_pan_active = middle_pan_active;
 
         // Check for clicked links
         if let Some(clicked_link) = tab.check_link_hooks() {
@@ -3756,9 +3945,9 @@ impl eframe::App for MarkdownApp {
             self.mcp_bridge.inject_raw_input(raw_input);
         }
 
-        // When lightbox is open, intercept scroll events before they reach InputState.
-        // This prevents the document's ScrollArea from scrolling while letting us
-        // use the captured delta for lightbox zoom.
+        // When lightbox is open, intercept scroll/gesture events before they reach
+        // InputState. This prevents the document viewer underneath the overlay
+        // from reacting to the gesture while the lightbox consumes its wheel zoom.
         self.lightbox_scroll = 0.0;
         if self.lightbox.is_some() {
             for event in &raw_input.events {
@@ -3768,7 +3957,7 @@ impl eframe::App for MarkdownApp {
             }
             raw_input
                 .events
-                .retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+                .retain(|e| !matches!(e, egui::Event::MouseWheel { .. } | egui::Event::Zoom(_)));
         }
     }
 
@@ -3780,7 +3969,8 @@ impl eframe::App for MarkdownApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let state = PersistedState {
             dark_mode: Some(self.dark_mode),
-            zoom_level: Some(self.zoom_level),
+            scaling: Some(self.scaling),
+            viewer_zoom: Some(self.viewer_zoom),
             show_outline: Some(self.show_outline),
             full_width_content: Some(self.full_width_content),
             open_tabs: Some(self.get_open_tab_paths()),
@@ -3859,7 +4049,7 @@ impl eframe::App for MarkdownApp {
             ctx.set_visuals(visuals);
         }
 
-        ctx.set_zoom_factor(self.zoom_level);
+        ctx.set_zoom_factor(self.scaling);
 
         // Update window title only when dirty
         if self.title_dirty {
@@ -3878,7 +4068,7 @@ impl eframe::App for MarkdownApp {
         let mut toggle_outline = false;
         let mut toggle_explorer = false;
         let mut quit_app = false;
-        let mut zoom_delta: f32 = 0.0;
+        let mut scaling_delta: f32 = 0.0;
         let mut go_back = false;
         let mut go_forward = false;
         let mut close_tab = false;
@@ -3892,36 +4082,41 @@ impl eframe::App for MarkdownApp {
         let mut close_search_kb = false;
         let mut keyboard_scroll_action: Option<KeyboardScrollAction> = None;
 
-        // Ctrl+/- zoom: applies to lightbox when open, document otherwise
+        // Ctrl+/- changes global UI scaling. Lightbox image zoom keeps its
+        // existing keyboard behavior while it is open.
         ctx.input(|i| {
             if i.modifiers.ctrl
                 && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
             {
-                zoom_delta = 0.1;
+                scaling_delta = 0.1;
             }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Minus) {
-                zoom_delta = -0.1;
+                scaling_delta = -0.1;
             }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Num0) {
                 if self.lightbox.is_some() {
                     // Reset lightbox zoom
-                    zoom_delta = 0.0;
+                    scaling_delta = 0.0;
                     if let Some(lb) = &mut self.lightbox {
                         lb.zoom = 1.0;
                     }
                 } else {
-                    zoom_delta = 1.0 - self.zoom_level;
+                    scaling_delta = 1.0 - self.scaling;
                 }
             }
         });
 
-        // Apply zoom to lightbox or document
-        if zoom_delta != 0.0 {
+        // Apply the keyboard scaling step to the lightbox or app chrome.
+        if scaling_delta != 0.0 {
             if let Some(lb) = &mut self.lightbox {
-                let factor = if zoom_delta > 0.0 { 1.25 } else { 1.0 / 1.25 };
+                let factor = if scaling_delta > 0.0 {
+                    1.25
+                } else {
+                    1.0 / 1.25
+                };
                 lb.zoom = (lb.zoom * factor).clamp(0.1, 10.0);
             } else {
-                self.zoom_level = (self.zoom_level + zoom_delta).clamp(0.5, 3.0);
+                self.scaling = (self.scaling + scaling_delta).clamp(MIN_SCALING, MAX_SCALING);
             }
         }
 
@@ -3989,16 +4184,6 @@ impl eframe::App for MarkdownApp {
                 // Ctrl+Q: Quit
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Q) {
                     quit_app = true;
-                }
-                // Ctrl + scroll wheel for zoom
-                if i.modifiers.ctrl && i.raw_scroll_delta.y != 0.0 {
-                    self.zoom_level = (self.zoom_level
-                        + if i.raw_scroll_delta.y > 0.0 {
-                            0.1
-                        } else {
-                            -0.1
-                        })
-                    .clamp(0.5, 3.0);
                 }
                 // F5: Toggle file watching
                 if i.key_pressed(egui::Key::F5) {
@@ -4330,42 +4515,61 @@ impl eframe::App for MarkdownApp {
 
                     ui.separator();
 
-                    let zoom_in_btn = ui.add(egui::Button::new("Zoom In").shortcut_text("Ctrl++"));
+                    let scaling_in_btn =
+                        ui.add(egui::Button::new("Scale Up").shortcut_text("Ctrl++"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Zoom In",
+                        "Menu: View → Scale Up",
                         "button",
-                        &zoom_in_btn,
+                        &scaling_in_btn,
                         None,
                     );
-                    if zoom_in_btn.clicked() {
-                        self.zoom_level = (self.zoom_level + 0.1).min(3.0);
+                    if scaling_in_btn.clicked() {
+                        self.scaling = (self.scaling + 0.1).min(MAX_SCALING);
                         ui.close();
                     }
-                    let zoom_out_btn =
-                        ui.add(egui::Button::new("Zoom Out").shortcut_text("Ctrl+-"));
+                    let scaling_out_btn =
+                        ui.add(egui::Button::new("Scale Down").shortcut_text("Ctrl+-"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Zoom Out",
+                        "Menu: View → Scale Down",
                         "button",
-                        &zoom_out_btn,
+                        &scaling_out_btn,
                         None,
                     );
-                    if zoom_out_btn.clicked() {
-                        self.zoom_level = (self.zoom_level - 0.1).max(0.5);
+                    if scaling_out_btn.clicked() {
+                        self.scaling = (self.scaling - 0.1).max(MIN_SCALING);
                         ui.close();
                     }
-                    let reset_zoom_btn =
-                        ui.add(egui::Button::new("Reset Zoom").shortcut_text("Ctrl+0"));
+                    let reset_scaling_btn =
+                        ui.add(egui::Button::new("Reset Scaling").shortcut_text("Ctrl+0"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Reset Zoom",
+                        "Menu: View → Reset Scaling",
                         "button",
-                        &reset_zoom_btn,
+                        &reset_scaling_btn,
                         None,
                     );
-                    if reset_zoom_btn.clicked() {
-                        self.zoom_level = 1.0;
+                    if reset_scaling_btn.clicked() {
+                        self.scaling = 1.0;
+                        ui.close();
+                    }
+
+                    ui.separator();
+                    ui.label(format!(
+                        "Viewer zoom: {}%",
+                        (self.viewer_zoom * 100.0).round() as i32
+                    ));
+                    let reset_viewer_zoom_btn = ui.button("Reset Viewer Zoom");
+                    #[cfg(feature = "mcp")]
+                    self.mcp_bridge.register_widget(
+                        "Menu: View → Reset Viewer Zoom",
+                        "button",
+                        &reset_viewer_zoom_btn,
+                        None,
+                    );
+                    if reset_viewer_zoom_btn.clicked() {
+                        self.viewer_zoom = 1.0;
                         ui.close();
                     }
                 });
@@ -4403,12 +4607,23 @@ impl eframe::App for MarkdownApp {
 
                 // Show status on the right
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Show zoom level if not at 100%
-                    if (self.zoom_level - 1.0).abs() > 0.01 {
+                    // Show app scaling and viewer zoom if not at 100%.
+                    if (self.scaling - 1.0).abs() > 0.01 {
                         ui.label(
                             egui::RichText::new(format!(
-                                "{}%",
-                                (self.zoom_level * 100.0).round() as i32
+                                "Scale {}%",
+                                (self.scaling * 100.0).round() as i32
+                            ))
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.separator();
+                    }
+                    if (self.viewer_zoom - 1.0).abs() > 0.01 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Viewer {}%",
+                                (self.viewer_zoom * 100.0).round() as i32
                             ))
                             .small()
                             .color(ui.visuals().weak_text_color()),
@@ -4723,6 +4938,36 @@ mod tests {
     #[test]
     fn full_width_content_uses_available_width() {
         assert_eq!(content_default_width(true), None);
+    }
+
+    #[test]
+    fn zoom_anchor_keeps_pointer_position_proportional() {
+        // The pointer is 100px into a 1000px document, 200px scrolled down.
+        // Doubling the layout height should keep that same document fraction
+        // under the pointer.
+        let offset = zoom_anchor_offset(200.0, 1_000.0, 2_000.0, 100.0, 1_500.0);
+        assert_eq!(offset, 500.0);
+    }
+
+    #[test]
+    fn zoom_anchor_clamps_to_new_scroll_bounds() {
+        let offset = zoom_anchor_offset(900.0, 1_000.0, 1_100.0, 900.0, 100.0);
+        assert_eq!(offset, 100.0);
+    }
+
+    #[test]
+    fn zoom_anchor_uses_prezoom_offset_when_new_content_clamps() {
+        // The new layout's maximum offset is smaller than the old offset. The
+        // anchor must still use the pre-zoom position rather than egui's
+        // already-clamped post-layout state.
+        let offset = zoom_anchor_offset(900.0, 2_000.0, 1_000.0, 100.0, 500.0);
+        assert_eq!(offset, 400.0);
+    }
+
+    #[test]
+    fn zoom_anchor_handles_unmeasured_content() {
+        let offset = zoom_anchor_offset(24.0, 0.0, 1_000.0, 100.0, 300.0);
+        assert_eq!(offset, 24.0);
     }
 
     #[test]

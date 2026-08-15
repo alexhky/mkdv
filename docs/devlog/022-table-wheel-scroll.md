@@ -79,5 +79,5 @@ All three scenarios pass on debug build. `cargo clippy --bin mkdv -- -D warnings
 ## Future Improvements
 
 - **Priority 3 in `TARGET_METRICS.md`**: Resizable column dividers via `egui_extras::TableBuilder` swap. Separate, much larger initiative — requires re-implementing cell-content rendering through the TableBuilder row API, which doesn't directly support the recursive `self.event()` markdown-in-cell pattern.
-- **Touch trackpad pinch zoom** over a table: works at the egui context level, no change needed.
+- **Touch trackpad pinch zoom** over a table: routed through the viewer-only zoom path; the table remains inside the pannable viewer.
 - **Mobile/touch drag-to-scroll**: ScrollArea handles this natively; not affected by this PR.

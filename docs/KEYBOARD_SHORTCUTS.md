@@ -45,10 +45,12 @@ The find bar also has on-screen `↑` and `↓` buttons next to the match count 
 | Ctrl+D | Toggle dark/light mode |
 | Ctrl+Shift+E | Toggle file explorer |
 | Ctrl+Shift+O | Toggle outline sidebar |
-| Ctrl++ / Ctrl+= | Zoom in |
-| Ctrl+- | Zoom out |
-| Ctrl+0 | Reset zoom to 100% |
+| Ctrl++ / Ctrl+= | Increase whole-app scaling |
+| Ctrl+- | Decrease whole-app scaling |
+| Ctrl+0 | Reset whole-app scaling to 100% |
 | ↑ / ↓ (when find bar is closed) | Scroll document up/down by line |
 | Page Up / Page Down | Scroll document up/down by page |
-| Ctrl+Scroll | Zoom in/out with mouse wheel |
+| Touchpad pinch over viewer | Smoothly zoom the Markdown viewer |
+| Ctrl+Scroll over viewer | Zoom the Markdown viewer |
+| Middle-drag over viewer | Pan the zoomed viewer page |
 | Shift+Scroll over a wide table | Scroll the table horizontally |

@@ -716,10 +716,10 @@ Belt-and-suspenders: keep `cargo publish --allow-dirty` in `scripts/publish-crat
 **Fix:** Add a split point at every block-level `Event::End` (Paragraph, Heading, BlockQuote, CodeBlock, List, Item, FootnoteDefinition, Table, HtmlBlock, MetadataBlock, DefinitionList*). Inline ends (Emphasis/Strong/Link/Image/Sup/Sub) stay rejected — splitting mid-paragraph would orphan inline formatting state. Table-internal ends (TableHead/Row/Cell) also rejected since tables are pre-parsed atomically.
 **Files:** `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs` (`is_block_end_tag`)
 
-### Cache invalidation must include zoom and theme, not just width
+### Cache invalidation must include viewer zoom and theme, not just width
 **Context:** `show_scrollable`'s split_points y-coords are layout-dependent. The original invalidator only watched `available_size`.
-**Problem:** Zoom (Ctrl+/-) and dark-mode toggle leave stale split_points; viewport-skip then picks the wrong event range and renders garbage.
-**Fix:** `compute_layout_signature(ui, options)` hashes width, body font height, monospace font height, `dark_mode`, `default_width`, and `indentation_spaces`. ScrollableCache stores `layout_signature: u64`; mismatch clears `split_points` and `page_size`. The body-font-height term captures egui's zoom factor implicitly — no need to read `pixels_per_point` separately.
+**Problem:** Viewer zoom and dark-mode toggle leave stale split_points; viewport-skip then picks the wrong event range and renders garbage.
+**Fix:** `compute_layout_signature(ui, options)` hashes width, body font height, monospace font height, `dark_mode`, `default_width`, `indentation_spaces`, and the renderer's content scale. ScrollableCache stores `layout_signature: u64`; mismatch clears `split_points` and `page_size`. The body-font-height term captures the scoped viewer style implicitly — no need to read `pixels_per_point` separately.
 **Files:** `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs` (`compute_layout_signature`)
 
 ### show_scrollable parsed pulldown on every frame
@@ -753,7 +753,7 @@ Belt-and-suspenders: keep `cargo publish --allow-dirty` in `scripts/publish-crat
 ### Vertical-wheel → horizontal table offset must be modifier-gated
 **Context:** Issue #4 wanted wheel-over-table to scroll wide tables horizontally without grabbing the bottom scrollbar. The first shipped fix (`forward_wheel_to_horizontal_scroll`) redirected any hovered-table `smooth_scroll_delta.y` into `out.state.offset.x`. Issue #22 then reported that ordinary document scrolling nudged wide tables left/right whenever the cursor crossed one — the cost of the unconditional redirect was higher than the benefit. PR #23 removed the helper entirely.
 **Current state (`forward_shift_wheel_to_horizontal_scroll`):** the helper is back but only acts when `ui.ctx().input(|i| i.modifiers.shift)` is true. Plain wheel always goes to the outer document scroller; Shift+wheel is the explicit opt-in for sideways table scrolling. Edge pass-through is preserved so Shift+wheel at the table's left/right edge keeps moving the page.
-**Why the gate works:** Shift is unused elsewhere in the document scroller's wheel handling (Ctrl is taken by zoom), and aligns with the common browser convention of Shift+wheel for horizontal scroll. Users who don't know about it still get correct default behavior (#22); those who want #4's UX have a discoverable opt-in.
+**Why the gate works:** Shift is unused elsewhere in the document scroller's wheel handling (Ctrl is taken by viewer zoom), and aligns with the common browser convention of Shift+wheel for horizontal scroll. Users who don't know about it still get correct default behavior (#22); those who want #4's UX have a discoverable opt-in.
 **Lesson:** when adding a "redirect" of an input that already has a default consumer, gate it on a modifier or another explicit signal — otherwise the redirect competes with the default for every event and the user perceives "input was eaten" or "the thing under my cursor moves when I didn't ask it to."
 **Files:** `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs` (`forward_shift_wheel_to_horizontal_scroll`, both table call sites)
 
@@ -850,7 +850,7 @@ The pending_scroll_offset invalidation block (lines 630-634 area) previously cle
 Verified: outline-click on far heading lands the heading at viewport top; scroll-up after outline-click no longer leaves blank space at top; search Ctrl+F + Enter still works (bootstrap still records active_search_y).
 
 **Known remaining edge case** (acceptable, documented):
-When the user changes layout_signature (Ctrl+/-, theme toggle, window resize) while scrolled deep, the *layout_signature change* branch (above) clears split_points (correctly — they're for the old layout). The next paint is a bootstrap at the user's current non-zero scroll, repopulating with new bad screen-y values. Outline-click after that scenario will be off until the user scrolls back to top and the original bootstrap-style split_points are re-established. Workaround: scroll to top before zooming/theming. Real fix requires the deeper coord-system work tracked below.
+When the user changes layout_signature (viewer zoom, theme toggle, window resize) while scrolled deep, the *layout_signature change* branch (above) clears split_points (correctly — they're for the old layout). The next paint is a bootstrap at the user's current non-zero scroll, repopulating with new bad screen-y values. Outline-click after that scenario will be off until the user scrolls back to top and the original bootstrap-style split_points are re-established. Workaround: scroll to top before viewer zoom/theming. Real fix requires the deeper coord-system work tracked below.
 
 **Open future work:**
 1. Audit ALL split_points consumers to confirm whether they interpret values as screen-y or content-y. The `allocate_space(first_end_position.to_vec2())` call at `:737` advances the cursor by Y; the right value depends on whether the cursor's reference frame uses screen-y or content-y semantics. Compile-time enforcement of the coord system (newtype wrapper around `f32`) would prevent future regressions.

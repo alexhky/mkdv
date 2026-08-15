@@ -2,6 +2,14 @@
 
 All notable changes to mkdv will be documented in this file.
 
+## Unreleased
+
+### Features
+
+- Split whole-app `scaling` from Markdown viewer zoom. Touchpad pinch and
+  Ctrl+wheel now zoom the viewer smoothly around the pointer, while a middle
+  drag pans the zoomed page without activating links.
+
 ## [0.1.15] - 2026-07-23
 
 ### Bug Fixes

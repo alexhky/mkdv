@@ -428,7 +428,7 @@ fn parser_options_math(is_math_enabled: bool) -> pulldown_cmark::Options {
 ///
 /// `split_points` cache y-positions, which become invalid when anything that
 /// affects layout changes. The previous code (parsers/pulldown.rs invalidation
-/// block) only watched `available_size`, so zooming (Ctrl++/-) or toggling
+/// block) only watched `available_size`, so viewer zooming or toggling
 /// dark mode would leave stale split_points in place and the viewport-skip
 /// math would render the wrong content range.
 fn compute_layout_signature(ui: &egui::Ui, options: &CommonMarkOptions) -> u64 {
@@ -437,11 +437,11 @@ fn compute_layout_signature(ui: &egui::Ui, options: &CommonMarkOptions) -> u64 {
     // Width drives wrap and is the dominant layout input. Quantize to the
     // nearest pixel so sub-pixel float jitter from per-frame egui rounding
     // (very common during image/font async loading) doesn't invalidate the
-    // cache. Real width changes (resize, zoom) flip the int bucket; tiny
+    // cache. Real width changes (resize, viewer zoom) flip the int bucket; tiny
     // float fluctuations don't.
     (ui.available_width().round() as i32).hash(&mut h);
     // Body / monospace text heights — quantize to 0.1 px for the same
-    // reason. A real font/zoom change shifts heights by multiple px; sub-
+    // reason. A real font/viewer-zoom change shifts heights by multiple px; sub-
     // pixel rounding from per-frame ppp resolution stays in one bucket.
     ((ui.text_style_height(&egui::TextStyle::Body) * 10.0).round() as i32).hash(&mut h);
     ((ui.text_style_height(&egui::TextStyle::Monospace) * 10.0).round() as i32).hash(&mut h);
@@ -452,6 +452,7 @@ fn compute_layout_signature(ui: &egui::Ui, options: &CommonMarkOptions) -> u64 {
     // Caller-configured constraints that affect block widths.
     options.default_width.hash(&mut h);
     options.indentation_spaces.hash(&mut h);
+    options.content_scale.to_bits().hash(&mut h);
     h.finish()
 }
 
@@ -703,6 +704,7 @@ impl CommonMarkViewerInternal {
         content_version: Option<u64>,
         pending_scroll_offset: Option<f32>,
         scroll_source: Option<egui::scroll_area::ScrollSource>,
+        scroll_axes: [bool; 2],
     ) -> egui::scroll_area::ScrollAreaOutput<()> {
         let available_size = ui.available_size();
         let scroll_id = source_id.with("_scroll_area");
@@ -748,7 +750,7 @@ impl CommonMarkViewerInternal {
                 sc.page_size = None;
                 sc.split_points.clear();
             }
-            // Width/zoom/theme change: y-coordinates are invalid for the
+            // Width/viewer-zoom/theme change: y-coordinates are invalid for the
             // new layout, even though parsed events are still good.
             if sc.layout_signature != layout_sig {
                 sc.layout_signature = layout_sig;
@@ -809,7 +811,7 @@ impl CommonMarkViewerInternal {
 
         // Helper: build the renderer-owned ScrollArea with caller config.
         let make_scroll_area = || {
-            let mut sa = egui::ScrollArea::vertical()
+            let mut sa = egui::ScrollArea::new(scroll_axes)
                 .id_salt(scroll_id)
                 .auto_shrink([false, true]);
             if let Some(offset) = pending_scroll_offset {
@@ -991,7 +993,7 @@ impl CommonMarkViewerInternal {
         let _ = clamped;
         out
         // No trailing invalidation needed — layout_signature is checked at
-        // the top of show_scrollable, so a width/zoom/theme change in the
+        // the top of show_scrollable, so a width/viewer-zoom/theme change in the
         // same frame falls into the bootstrap branch above immediately
         // instead of one frame later.
     }
@@ -1402,7 +1404,7 @@ impl CommonMarkViewerInternal {
                 } else {
                     #[cfg(feature = "math")]
                     {
-                        crate::render_math(ui, cache, &tex, true);
+                        crate::render_math_scaled(ui, cache, &tex, true, options.content_scale);
                     }
                     #[cfg(not(feature = "math"))]
                     if let Some(math_fn) = options.math_fn {
@@ -1419,7 +1421,7 @@ impl CommonMarkViewerInternal {
                 newline(ui);
                 #[cfg(feature = "math")]
                 {
-                    crate::render_math(ui, cache, &tex, false);
+                    crate::render_math_scaled(ui, cache, &tex, false, options.content_scale);
                 }
                 #[cfg(not(feature = "math"))]
                 if let Some(math_fn) = options.math_fn {

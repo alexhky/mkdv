@@ -29,7 +29,8 @@ currently enforce them with benchmarks.
 - egui/eframe 0.33 using the glow backend.
 - Custom `Vec<Tab>` tab system with per-tab rendering cache, scroll state,
   outline, search results, and back/forward navigation.
-- Persisted tabs, active tab, theme, zoom, content width, explorer state, sort
+- Persisted tabs, active tab, theme, app scaling, viewer zoom, content width,
+  explorer state, sort order, and recent files.
   order, and recent files.
 - Welcome page when no documents are open.
 

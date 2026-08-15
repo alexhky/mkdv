@@ -24,7 +24,7 @@ Wired into both the markdown-table and HTML-table call sites by capturing the `S
 
 ## Why Shift
 
-- Ctrl is taken by zoom (`Ctrl+wheel`).
+- Ctrl is taken by viewer zoom (`Ctrl+wheel`).
 - Shift+wheel for horizontal scroll matches the convention in Firefox/Chrome.
 - Users without prior knowledge still get correct default behavior; discovery cost is low.
 

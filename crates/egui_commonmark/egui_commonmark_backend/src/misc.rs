@@ -40,6 +40,10 @@ pub struct CommonMarkOptions<'f> {
     pub max_image_width: Option<usize>,
     pub show_alt_text_on_hover: bool,
     pub default_width: Option<usize>,
+    /// Scale factor used by a viewer that wants browser-like content zoom.
+    /// This affects layout widths; widget font sizes are scaled by the caller's
+    /// scoped egui style.
+    pub content_scale: f32,
     #[cfg(feature = "better_syntax_highlighting")]
     pub theme_light: String,
     #[cfg(feature = "better_syntax_highlighting")]
@@ -66,6 +70,7 @@ impl std::fmt::Debug for CommonMarkOptions<'_> {
             .field("max_image_width", &self.max_image_width)
             .field("show_alt_text_on_hover", &self.show_alt_text_on_hover)
             .field("default_width", &self.default_width);
+        s.field("content_scale", &self.content_scale);
 
         #[cfg(feature = "better_syntax_highlighting")]
         s.field("theme_light", &self.theme_light)
@@ -91,6 +96,7 @@ impl Default for CommonMarkOptions<'_> {
             max_image_width: None,
             show_alt_text_on_hover: true,
             default_width: None,
+            content_scale: 1.0,
             #[cfg(feature = "better_syntax_highlighting")]
             theme_light: DEFAULT_THEME_LIGHT.to_owned(),
             #[cfg(feature = "better_syntax_highlighting")]
@@ -118,12 +124,12 @@ impl CommonMarkOptions<'_> {
     }
 
     pub fn max_width(&self, ui: &Ui) -> f32 {
-        let available_width = ui.available_width();
+        let available_width = ui.available_width() * self.content_scale;
 
         // Use default_width as the preferred width, but never exceed available_width
         // This ensures text wraps properly when the window is narrower than default_width
         if let Some(default_width) = self.default_width {
-            (default_width as f32).min(available_width)
+            (default_width as f32 * self.content_scale).min(available_width)
         } else {
             available_width
         }
@@ -432,7 +438,10 @@ impl Link {
 
         let is_hook = cache.link_hooks().contains_key(&destination);
 
-        if response.clicked() || response.middle_clicked() {
+        // Middle button is reserved by the host viewer for panning. A link
+        // activates only on the primary click, matching the viewer's normal
+        // navigation behavior while allowing a middle drag to start anywhere.
+        if response.clicked() {
             if is_hook {
                 cache.link_hooks_mut().insert(destination.clone(), true);
             } else {
@@ -478,7 +487,7 @@ impl Image {
     pub fn end(self, ui: &mut Ui, cache: &mut CommonMarkCache, options: &CommonMarkOptions) {
         let response = ui.add(
             egui::Image::from_uri(&self.uri)
-                .fit_to_original_size(1.0)
+                .fit_to_original_size(options.content_scale)
                 .max_width(options.max_width(ui))
                 .sense(egui::Sense::click()),
         );
@@ -738,7 +747,10 @@ impl CodeBlock {
                 // Placeholder with loading text
                 let w = max_width.min(options.max_width(ui));
                 let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(w, 200.0), egui::Sense::hover());
+                    ui.allocate_exact_size(
+                        egui::vec2(w, 200.0 * options.content_scale),
+                        egui::Sense::hover(),
+                    );
                 if ui.is_rect_visible(rect) {
                     ui.painter()
                         .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
@@ -746,7 +758,7 @@ impl CodeBlock {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Rendering diagram\u{2026}",
-                        egui::FontId::proportional(14.0),
+                        egui::FontId::proportional(14.0 * options.content_scale),
                         ui.visuals().text_color().gamma_multiply(0.5),
                     );
                 }
@@ -757,7 +769,7 @@ impl CodeBlock {
                 let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
                 let response = ui.add(
                     egui::Image::new(egui::ImageSource::Texture(sized_texture))
-                        .fit_to_original_size(1.0)
+                        .fit_to_original_size(options.content_scale)
                         .max_width(options.max_width(ui).min(max_width))
                         .sense(egui::Sense::click()),
                 );
@@ -1405,6 +1417,18 @@ pub fn render_math(
     latex: &str,
     is_inline: bool,
 ) {
+    render_math_scaled(ui, cache, latex, is_inline, 1.0);
+}
+
+/// Render math with a caller-provided viewer content scale.
+#[cfg(feature = "math")]
+pub fn render_math_scaled(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    latex: &str,
+    is_inline: bool,
+    content_scale: f32,
+) {
     let is_dark = ui.style().visuals.dark_mode;
     let bg = ui.visuals().panel_fill;
     let fg = ui.visuals().text_color();
@@ -1471,9 +1495,14 @@ pub fn render_math(
                 ui.spinner();
             } else {
                 // Display: placeholder box
-                let w = ui.available_width().min(400.0);
+                let w = ui
+                    .available_width()
+                    .min(400.0 * content_scale);
                 let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+                    ui.allocate_exact_size(
+                        egui::vec2(w, 40.0 * content_scale),
+                        egui::Sense::hover(),
+                    );
                 if ui.is_rect_visible(rect) {
                     ui.painter()
                         .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
@@ -1481,7 +1510,7 @@ pub fn render_math(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Rendering formula\u{2026}",
-                        egui::FontId::proportional(12.0),
+                        egui::FontId::proportional(12.0 * content_scale),
                         ui.visuals().text_color().gamma_multiply(0.5),
                     );
                 }
@@ -1494,6 +1523,7 @@ pub fn render_math(
             size,
             baseline_ratio,
         }) => {
+            let display_size = *size * content_scale;
             let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
             if is_inline {
                 // Align the formula's own baseline to the text baseline. Inline
@@ -1535,17 +1565,23 @@ pub fn render_math(
                     .and_then(|r| r.row.glyphs.first())
                     .map_or(font_size * 0.8, |g| g.font_ascent);
                 let text_descent = line_height - font_ascent;
-                let image_descent = (1.0 - *baseline_ratio) * size.y;
+                let image_descent = (1.0 - *baseline_ratio) * display_size.y;
                 let lift = (text_descent - image_descent).max(0.0);
                 let (rect, _) = ui
-                    .allocate_exact_size(egui::vec2(size.x, size.y + lift), egui::Sense::hover());
-                img.paint_at(ui, egui::Rect::from_min_size(rect.min, *size));
+                    .allocate_exact_size(
+                        egui::vec2(display_size.x, display_size.y + lift),
+                        egui::Sense::hover(),
+                    );
+                img.paint_at(
+                    ui,
+                    egui::Rect::from_min_size(rect.min, display_size),
+                );
             } else {
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
                     ui.add(
                         egui::Image::new(egui::ImageSource::Texture(sized_texture))
-                            .fit_to_original_size(1.0)
+                            .fit_to_original_size(content_scale)
                             .max_width(ui.available_width()),
                     );
                 });

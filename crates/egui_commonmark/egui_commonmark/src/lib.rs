@@ -82,7 +82,7 @@ pub use egui_commonmark_backend_extended::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend_extended::misc::{CommonMarkCache, STRONG_FONT_FAMILY};
 pub use egui_commonmark_backend_extended::typography::{Measurement, TypographyConfig};
 #[cfg(feature = "math")]
-pub use egui_commonmark_backend_extended::render_math;
+pub use egui_commonmark_backend_extended::{render_math, render_math_scaled};
 #[cfg(feature = "math")]
 pub use egui_commonmark_backend_extended::warm_math_fonts;
 
@@ -96,9 +96,12 @@ pub use egui_commonmark_backend_extended;
 
 use egui_commonmark_backend_extended::*;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CommonMarkViewer<'f> {
     options: CommonMarkOptions<'f>,
+    /// Browser-like content zoom. The caller normally pairs this with a
+    /// scoped egui style that scales the viewer's font sizes.
+    content_scale: f32,
     /// Caller-provided content version. When `Some`, the renderer uses this
     /// as the per-document cache key instead of hashing the entire text on
     /// every frame. Bump this counter on every load/reload.
@@ -112,6 +115,21 @@ pub struct CommonMarkViewer<'f> {
     /// the caller needs to disable drag-scroll (e.g. to keep text selection
     /// working) while preserving wheel-scroll.
     scroll_source: Option<egui::scroll_area::ScrollSource>,
+    /// Which axes the renderer-owned ScrollArea should expose.
+    scroll_axes: [bool; 2],
+}
+
+impl Default for CommonMarkViewer<'_> {
+    fn default() -> Self {
+        Self {
+            options: CommonMarkOptions::default(),
+            content_scale: 1.0,
+            content_version: None,
+            pending_scroll_offset: None,
+            scroll_source: None,
+            scroll_axes: [false, true],
+        }
+    }
 }
 
 impl<'f> CommonMarkViewer<'f> {
@@ -137,6 +155,20 @@ impl<'f> CommonMarkViewer<'f> {
     /// the [`max_image_width`](Self::max_image_width)
     pub fn default_width(mut self, width: Option<usize>) -> Self {
         self.options.default_width = width;
+        self
+    }
+
+    /// Scale markdown layout widths to match a scoped viewer zoom.
+    pub fn content_scale(mut self, scale: f32) -> Self {
+        self.content_scale = scale.max(f32::EPSILON);
+        self.options.content_scale = self.content_scale;
+        self
+    }
+
+    /// Configure horizontal and vertical scrolling for the renderer-owned area.
+    /// The default preserves the traditional vertical-only viewer.
+    pub fn scroll_axes(mut self, axes: [bool; 2]) -> Self {
+        self.scroll_axes = axes;
         self
     }
 
@@ -519,6 +551,7 @@ impl<'f> CommonMarkViewer<'f> {
             self.content_version,
             self.pending_scroll_offset,
             self.scroll_source,
+            self.scroll_axes,
         )
     }
 }
