@@ -28,6 +28,31 @@ The root package's `[patch.crates-io]` entries are used for local development;
 Cargo ignores them when publishing and resolves the pinned renderer crates from
 the registry.
 
+## Build profiles and verification speed
+
+The root package enables syntax highlighting, Mermaid, SVG, and Typst-based
+math rendering, so the first dependency build is intentionally substantial.
+Keep Cargo's `target/` cache between checks and use the fast commands below for
+the normal edit loop:
+
+```bash
+cargo check --offline
+cargo test --offline
+```
+
+The standard `cargo build --release` and `cargo install` commands use the
+release profile in `Cargo.toml`. It favors a small final binary with size
+optimization, full LTO, and one code-generation unit, so it can take much
+longer than a development build. For a local installed binary, use:
+
+```bash
+cargo install --offline --locked --profile release-dev --path .
+```
+
+Use the full release profile for the artifact that will be published. Avoid
+`cargo clean` unless a complete rebuild is intentional; it removes the
+incremental dependency cache.
+
 ## Release checklist
 
 - [ ] Update `version` in `Cargo.toml`.

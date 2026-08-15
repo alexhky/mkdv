@@ -96,6 +96,51 @@ cargo test --manifest-path crates/egui_commonmark/Cargo.toml --workspace
 The root `cargo test` command does not execute the nested renderer workspace's
 own unit, integration, or proc-macro tests.
 
+## Build and Test Performance
+
+The first build can take several minutes because the application enables a
+large renderer feature set: syntax highlighting (`syntect`), Mermaid
+diagrams (`merman`/`resvg`), and math rendering (`mitex`/Typst). Cargo caches
+compiled dependencies, so warm incremental builds are much faster. Keep the
+`target/` directory between runs and avoid `cargo clean` during normal
+development.
+
+Use the smallest command that answers the question at hand:
+
+```bash
+# Fast edit loop; does not link an executable
+cargo check --offline
+
+# Root application tests
+cargo test --offline
+
+# Run one relevant test and its dependencies
+cargo test --offline test_name
+
+# Full renderer-workspace verification (separate from the root package)
+cargo test --offline --manifest-path crates/egui_commonmark/Cargo.toml --workspace
+```
+
+`cargo test --all-targets` and the renderer-workspace command are useful for
+pre-merge or release verification, but are more work than the root test loop.
+Changing between `dev`, `release-dev`, and `release` profiles also creates
+separate caches and recompiles dependencies.
+
+For a locally runnable optimized binary, use the repository's faster custom
+profile:
+
+```bash
+cargo build --offline --profile release-dev
+cargo install --offline --locked --profile release-dev --path .
+```
+
+The `release-dev` profile uses thin LTO and multiple code-generation units.
+The normal `release` profile is intentionally slower because it uses size
+optimization, full LTO, and one code-generation unit; reserve it for release
+artifacts and publishing. If clean or repeated builds dominate CI time,
+consider adding a shared `sccache` compiler cache and a fast linker such as
+`mold` or `lld` in the build environment.
+
 ## Near-Term Maintenance
 
 1. Remove the vendored renderer's current Rust/egui warnings:

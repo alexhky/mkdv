@@ -175,6 +175,17 @@ cargo install --path .
 mkdv --install-desktop   # Linux/GNOME only
 ```
 
+`cargo install --path .` uses Cargo's full release profile and may take several
+minutes on a clean checkout. For repeated local development, use the faster
+optimized profile instead:
+
+```bash
+cargo install --offline --locked --profile release-dev --path .
+```
+
+For the quickest edit/test loop, run `cargo check --offline` followed by
+`cargo test --offline`; keep `target/` so Cargo can reuse compiled dependencies.
+
 ### System Dependencies (Arch Linux)
 
 Only needed for `cargo install` / building from source:
