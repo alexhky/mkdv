@@ -18,9 +18,13 @@ the Markdown viewer:
   multiplied by the viewer zoom.
 - `CommonMarkViewer::content_scale` scales its layout widths as well, allowing
   wide content to remain pannable instead of shrinking the application UI.
-- egui's multiplicative `InputState::zoom_delta()` provides smooth native
-  touchpad pinch and Ctrl/Cmd-wheel input. Input is accepted only while the
-  pointer is over the viewer, so sidebars and menus are unaffected.
+- Native `Event::Zoom` input and raw Ctrl/Cmd-wheel deltas provide smooth
+  touchpad pinch on platforms that expose a pinch event and on Linux systems
+  that synthesize pinch as Ctrl+wheel. Input is accepted only while the pointer
+  is over the viewer, so sidebars and menus are unaffected.
+- Point-unit touchpad scrolling remains a direct two-axis translation. The
+  renderer consumes the gesture vector as-is; the viewer does not add a
+  second vertical-only correction after the scroll area runs.
 - The current document position under the pointer is preserved using the old
   and new content extents on both axes.
 - The viewer exposes both scroll axes. Holding the middle mouse button and
@@ -28,7 +32,8 @@ the Markdown viewer:
   as a Markdown link activation.
 
 The viewer zoom is persisted between sessions and can be reset from **View →
-Reset Viewer Zoom**. Its supported range is 50%–300%.
+Reset Viewer Zoom**. Its supported range is 75%–300% so zoomed-out text remains
+readable.
 
 ## Validation
 

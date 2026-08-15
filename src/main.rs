@@ -137,8 +137,13 @@ const MAX_WATCHER_RETRIES: u32 = 3;
 const FLASH_DURATION_MS: u64 = 600;
 const MIN_SCALING: f32 = 0.5;
 const MAX_SCALING: f32 = 3.0;
-const MIN_VIEWER_ZOOM: f32 = 0.5;
+// Keep zoomed-out text readable while still leaving room to see more of a
+// document. This is deliberately higher than the app-wide scaling minimum:
+// viewer zoom is a reading aid, not a way to make the entire UI tiny.
+const MIN_VIEWER_ZOOM: f32 = 0.75;
 const MAX_VIEWER_ZOOM: f32 = 3.0;
+const NATIVE_LINE_SCROLL_SPEED: f32 = 40.0;
+const SCROLL_ZOOM_SPEED: f32 = 1.0 / 200.0;
 
 // Optimal widths for initial window sizing (based on typography research)
 // Content: 600px optimal for 55-75 CPL readability
@@ -199,6 +204,28 @@ fn content_default_width(full_width_content: bool) -> Option<usize> {
 /// that cannot report it), so an unknown state is treated as windowed.
 fn toggled_fullscreen_state(current: Option<bool>) -> bool {
     !current.unwrap_or(false)
+}
+
+/// Convert a raw wheel event with the zoom modifier into its multiplicative
+/// zoom factor. egui performs the same conversion internally, but keeping a
+/// copy here lets the viewer handle Linux touchpads whose pinch gesture is
+/// delivered as a stream of Ctrl+wheel events.
+fn wheel_zoom_factor(unit: egui::MouseWheelUnit, delta: egui::Vec2, viewport_height: f32) -> f32 {
+    let points = match unit {
+        egui::MouseWheelUnit::Point => delta.x + delta.y,
+        egui::MouseWheelUnit::Line => (delta.x + delta.y) * NATIVE_LINE_SCROLL_SPEED,
+        egui::MouseWheelUnit::Page => (delta.x + delta.y) * viewport_height.max(1.0),
+    };
+    (SCROLL_ZOOM_SPEED * points).exp()
+}
+
+/// Keep a zoom factor usable even if a backend reports a malformed gesture.
+fn sane_zoom_factor(factor: f32) -> f32 {
+    if factor.is_finite() && factor > 0.0 {
+        factor
+    } else {
+        1.0
+    }
 }
 
 /// Return the scroll offset that keeps the content under the pointer stable
@@ -1656,6 +1683,14 @@ struct MarkdownApp {
     lightbox: Option<LightboxState>,
     // Scroll delta captured from raw_input_hook for lightbox zoom (stripped from RawInput)
     lightbox_scroll: f32,
+    /// Multiplicative viewer zoom collected from raw native gesture events.
+    /// This is reset at the beginning of every input pass.
+    pending_viewer_zoom: f32,
+    /// Point-unit wheel input from a touchpad. The renderer normally handles
+    /// this, but the flag lets us distinguish smooth two-axis touchpad input
+    /// from line-based mouse-wheel input when preserving selection behavior.
+    pending_touchpad_scroll: egui::Vec2,
+    pending_touchpad_scroll_only: bool,
     // Counter for unique lightbox IDs (prevents stale egui state between opens)
     lightbox_open_count: u64,
     /// True after a middle-button press began over the markdown viewer.
@@ -1826,6 +1861,9 @@ impl MarkdownApp {
             open_tab_paths: HashSet::new(),
             lightbox: None,
             lightbox_scroll: 0.0,
+            pending_viewer_zoom: 1.0,
+            pending_touchpad_scroll: egui::Vec2::ZERO,
+            pending_touchpad_scroll_only: false,
             lightbox_open_count: 0,
             middle_pan_active: false,
             search: SearchState::default(),
@@ -3076,6 +3114,9 @@ impl MarkdownApp {
         let mut viewer_zoom = viewer_zoom_before;
         let mut zoom_anchor: Option<(egui::Pos2, f32, f32)> = None;
         let mut middle_pan_active = self.middle_pan_active;
+        let pending_viewer_zoom = self.pending_viewer_zoom;
+        let pending_touchpad_scroll = self.pending_touchpad_scroll;
+        let pending_touchpad_scroll_only = self.pending_touchpad_scroll_only;
         let lightbox_open = self.lightbox.is_some();
 
         // Snapshot search state before taking a mutable borrow on the active tab
@@ -3118,13 +3159,19 @@ impl MarkdownApp {
                 let pointer_pos = ui.ctx().input(|i| i.pointer.hover_pos());
                 let pointer_over_content =
                     !lightbox_open && pointer_pos.is_some_and(|pos| content_rect.contains(pos));
-                let zoom_input = ui.ctx().input(|i| {
-                    if pointer_over_content {
-                        i.zoom_delta()
+                let zoom_input = if pointer_over_content {
+                    let processed_zoom = ui.ctx().input(|i| i.zoom_delta());
+                    // Prefer the raw factor captured above. It contains the
+                    // complete Ctrl+wheel stream even when egui is still
+                    // smoothing the same touchpad events for a later frame.
+                    sane_zoom_factor(if (pending_viewer_zoom - 1.0).abs() > f32::EPSILON {
+                        pending_viewer_zoom
                     } else {
-                        1.0
-                    }
-                });
+                        processed_zoom
+                    })
+                } else {
+                    1.0
+                };
                 if pointer_over_content && (zoom_input - 1.0).abs() > f32::EPSILON {
                     let new_zoom =
                         (viewer_zoom_before * zoom_input).clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM);
@@ -3134,12 +3181,16 @@ impl MarkdownApp {
                     }
                 }
 
-                // Capture scroll input for manual handling during selection. Ctrl/Cmd
-                // wheel is classified by egui as zoom input and must not also scroll.
-                let (raw_scroll, zoom_modifier_active) = ui.ctx().input(|i| {
+                // Capture only the small selection-preserving correction used
+                // while the primary button is held. Normal touchpad movement
+                // is left to the renderer so both axes retain their original
+                // gesture vector instead of receiving a second vertical-only
+                // correction.
+                let (raw_scroll, zoom_modifier_active, primary_down) = ui.ctx().input(|i| {
                     (
-                        i.raw_scroll_delta.y,
+                        i.raw_scroll_delta,
                         i.modifiers.matches_any(egui::Modifiers::COMMAND),
+                        i.pointer.primary_down(),
                     )
                 });
                 let previous_scroll_offset = tab.scroll_offset;
@@ -3270,11 +3321,19 @@ impl MarkdownApp {
                     }
                 }
 
-                // Manual scroll handling for mouse wheel during text selection
-                if raw_scroll.abs() > 0.0 && pointer_over_content && !zoom_modifier_active {
+                // Manual scroll handling for mouse wheel during an active text
+                // selection. The renderer already handles ordinary touchpad
+                // scrolling, including diagonal movement, so this correction
+                // must never run for a passive two-finger gesture.
+                if raw_scroll.y.abs() > 0.0
+                    && pointer_over_content
+                    && !zoom_modifier_active
+                    && primary_down
+                    && !(pending_touchpad_scroll_only && pending_touchpad_scroll.length_sq() > 0.0)
+                {
                     let current_offset = scroll_output.state.offset.y;
                     let max_scroll = (tab.last_content_height - content_rect.height()).max(0.0);
-                    let new_offset = (current_offset - raw_scroll).clamp(0.0, max_scroll);
+                    let new_offset = (current_offset - raw_scroll.y).clamp(0.0, max_scroll);
 
                     // Don't store at boundaries (can break selection)
                     let would_hit_top = new_offset < 0.5;
@@ -3957,6 +4016,66 @@ impl eframe::App for MarkdownApp {
         {
             self.mcp_bridge.process_commands();
             self.mcp_bridge.inject_raw_input(raw_input);
+        }
+
+        // Keep native zoom input separate from egui's application-wide zoom
+        // machinery. On Linux, a touchpad pinch is commonly exposed as
+        // Ctrl+wheel rather than as a dedicated PinchGesture event. Reading
+        // the raw events preserves every small delta and makes the viewer
+        // gesture work on both forms of backend input.
+        self.pending_viewer_zoom = 1.0;
+        self.pending_touchpad_scroll = egui::Vec2::ZERO;
+        self.pending_touchpad_scroll_only = false;
+
+        let viewport_height = raw_input
+            .screen_rect
+            .map_or(800.0, |screen_rect| screen_rect.height());
+        let mut native_zoom = 1.0;
+        let mut wheel_zoom = 1.0;
+        let mut saw_native_zoom = false;
+        let mut saw_zoom_modifier = false;
+        let mut point_scroll = egui::Vec2::ZERO;
+        let mut saw_point_scroll = false;
+        let mut saw_non_point_scroll = false;
+
+        for event in &raw_input.events {
+            match event {
+                egui::Event::Zoom(factor) => {
+                    let factor = sane_zoom_factor(*factor);
+                    if (factor - 1.0).abs() > f32::EPSILON {
+                        native_zoom *= factor;
+                        saw_native_zoom = true;
+                    }
+                }
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } => {
+                    if modifiers.matches_any(egui::Modifiers::COMMAND) {
+                        wheel_zoom *= wheel_zoom_factor(*unit, *delta, viewport_height);
+                        saw_zoom_modifier = true;
+                    } else if matches!(unit, egui::MouseWheelUnit::Point) {
+                        point_scroll += *delta;
+                        saw_point_scroll = true;
+                    } else {
+                        saw_non_point_scroll = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.pending_viewer_zoom = sane_zoom_factor(if saw_native_zoom {
+            native_zoom
+        } else if saw_zoom_modifier {
+            wheel_zoom
+        } else {
+            1.0
+        });
+        if saw_point_scroll && !saw_non_point_scroll && !saw_zoom_modifier {
+            self.pending_touchpad_scroll = point_scroll;
+            self.pending_touchpad_scroll_only = point_scroll.length_sq() > 0.0;
         }
 
         // When lightbox is open, intercept scroll/gesture events before they reach
@@ -4998,6 +5117,24 @@ mod tests {
     #[test]
     fn fullscreen_toggle_leaves_fullscreen_state() {
         assert!(!toggled_fullscreen_state(Some(true)));
+    }
+
+    #[test]
+    fn wheel_zoom_factor_matches_egui_line_scroll_units() {
+        let factor = wheel_zoom_factor(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0), 800.0);
+        assert!((factor - (0.2_f32).exp()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn malformed_zoom_factors_are_ignored() {
+        assert_eq!(sane_zoom_factor(f32::NAN), 1.0);
+        assert_eq!(sane_zoom_factor(f32::INFINITY), 1.0);
+        assert_eq!(sane_zoom_factor(0.0), 1.0);
+    }
+
+    #[test]
+    fn viewer_zoom_minimum_stays_readable() {
+        assert_eq!(MIN_VIEWER_ZOOM, 0.75);
     }
 
     #[test]

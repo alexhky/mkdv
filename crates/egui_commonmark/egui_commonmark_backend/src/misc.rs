@@ -398,6 +398,24 @@ mod tests {
             );
         });
     }
+
+    #[cfg(feature = "mermaid")]
+    #[test]
+    fn scaled_media_size_follows_content_zoom() {
+        assert_eq!(
+            scaled_media_size(egui::vec2(320.0, 180.0), 1.5, 1_000.0),
+            egui::vec2(480.0, 270.0)
+        );
+    }
+
+    #[cfg(feature = "mermaid")]
+    #[test]
+    fn scaled_media_size_caps_width_without_changing_aspect_ratio() {
+        assert_eq!(
+            scaled_media_size(egui::vec2(800.0, 400.0), 2.0, 1_000.0),
+            egui::vec2(1_000.0, 500.0)
+        );
+    }
 }
 
 #[derive(Default)]
@@ -616,6 +634,22 @@ struct MermaidRendered {
 }
 
 #[cfg(feature = "mermaid")]
+/// Scale a rendered diagram once in logical points, then apply the same
+/// content-width cap used by Markdown layout. Keeping this calculation
+/// explicit avoids `Image`'s available-size fitting from introducing a second
+/// scale that makes diagrams drift away from the surrounding text when zoom
+/// changes.
+fn scaled_media_size(base_size: egui::Vec2, content_scale: f32, max_width: f32) -> egui::Vec2 {
+    let scale = content_scale.max(f32::EPSILON);
+    let desired = base_size * scale;
+    if max_width.is_finite() && max_width > 0.0 && desired.x > max_width {
+        desired * (max_width / desired.x)
+    } else {
+        desired
+    }
+}
+
+#[cfg(feature = "mermaid")]
 static MERMAID_FONTDB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut db = resvg::usvg::fontdb::Database::new();
     db.load_system_fonts();
@@ -767,10 +801,11 @@ impl CodeBlock {
             }
             Some(MermaidState::Ready { texture, size }) => {
                 let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
+                let max_width = options.max_width(ui).min(max_width);
+                let display_size = scaled_media_size(*size, options.content_scale, max_width);
                 let response = ui.add(
                     egui::Image::new(egui::ImageSource::Texture(sized_texture))
-                        .fit_to_original_size(options.content_scale)
-                        .max_width(options.max_width(ui).min(max_width))
+                        .fit_to_exact_size(display_size)
                         .sense(egui::Sense::click()),
                 );
                 if response.hovered() {

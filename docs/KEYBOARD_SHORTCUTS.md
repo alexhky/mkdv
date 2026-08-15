@@ -50,7 +50,7 @@ The find bar also has on-screen `↑` and `↓` buttons next to the match count 
 | Ctrl+0 | Reset whole-app scaling to 100% |
 | ↑ / ↓ (when find bar is closed) | Scroll document up/down by line |
 | Page Up / Page Down | Scroll document up/down by page |
-| Touchpad pinch over viewer | Smoothly zoom the Markdown viewer |
+| Touchpad pinch over viewer | Smoothly zoom the Markdown viewer (75%–300%) |
 | Ctrl+Scroll over viewer | Zoom the Markdown viewer |
 | Middle-drag over viewer | Pan the zoomed viewer page |
 | Shift+Scroll over a wide table | Scroll the table horizontally |

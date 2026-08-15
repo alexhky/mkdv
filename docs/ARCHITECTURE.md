@@ -13,7 +13,7 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
   - `active_tab: usize` - index of the currently active tab
   - `dark_mode: bool` - global theme setting
   - `scaling: f32` - global UI scaling (0.5 to 3.0)
-  - `viewer_zoom: f32` - Markdown-only content zoom (0.5 to 3.0)
+  - `viewer_zoom: f32` - Markdown-only content zoom (0.75 to 3.0)
   - `show_outline: bool` - toggle outline sidebar visibility
   - `full_width_content: bool` - use the full content pane instead of the readable-width cap
   - `show_explorer: bool` - toggle file explorer visibility
@@ -85,7 +85,7 @@ renderer, backend, macro, and test code under `crates/egui_commonmark/`.
 
 - **Keyboard document scrolling**: Plain document scroll keys are handled in `MarkdownApp::update` after mode-specific shortcuts are checked. `KeyboardScrollAction` maps Up/Down to fixed line steps and Page Up/Page Down to viewport-relative page steps through `keyboard_scroll_target`, which clamps against the active tab's `last_content_height`. The chosen target is assigned to the tab's `pending_scroll_offset`, so keyboard scrolling uses the same renderer-owned `ScrollArea` pipeline as outline and search jumps. Arrow keys are reserved for search-result navigation while the find bar is open, and document scrolling ignores Ctrl/Alt/Command-modified keypresses so it does not steal existing shortcuts.
 
-- **App scaling and viewer zoom**: `scaling` is applied with egui's global zoom factor and affects menus, sidebars, and window chrome. `viewer_zoom` is applied inside a scoped viewer style, so only Markdown typography, spacing, and layout widths change. egui's multiplicative `zoom_delta()` handles native touchpad pinch and Ctrl/Cmd-wheel smoothly; the viewer keeps the pointer's document position stable by proportionally anchoring both scroll axes. A middle-button drag updates the renderer-owned scroll offsets when zoomed in, without selecting text or activating links.
+- **App scaling and viewer zoom**: `scaling` is applied with egui's global zoom factor and affects menus, sidebars, and window chrome. `viewer_zoom` is applied inside a scoped viewer style, so only Markdown typography, spacing, and layout widths change. Raw native zoom events and Ctrl/Cmd-wheel deltas feed the viewer-only zoom path; point-unit touchpad scrolling stays a direct two-axis translation. The viewer keeps the pointer's document position stable by proportionally anchoring both scroll axes. A middle-button drag updates the renderer-owned scroll offsets when zoomed in, without selecting text or activating links.
 
 - **Fullscreen toggle**: The unused portion of the top menu/title bar detects a primary-button double-click and sends `ViewportCommand::Fullscreen` with the inverse of the reported native viewport state. The View menu exposes the same toggle. Controls embedded in the bar continue to consume their own pointer interactions, and an unknown initial fullscreen state is treated as windowed.
 

@@ -34,7 +34,7 @@ A fast, lightweight desktop Markdown viewer built with Rust and egui. Designed f
 
 ### View
 - **Dark & Light Themes** - Toggle with Ctrl+D
-- **Scaling & Viewer Zoom** - Ctrl++/-/0 changes whole-app scaling; pinch or Ctrl+Scroll zooms the Markdown viewer only. Middle-drag pans the page while viewer zoom is above 100%
+- **Scaling & Viewer Zoom** - Ctrl++/-/0 changes whole-app scaling; touchpad pinch or Ctrl+Scroll zooms the Markdown viewer only (75%–300%). Smooth two-axis touchpad scrolling and middle-drag panning keep the page moving naturally when zoomed in
 - **Fullscreen** - Double-click unused space in the top bar to enter or leave fullscreen; the View menu offers the same toggle
 - **Keyboard Scrolling** - Scroll documents with ↑/↓ by line or Page Up/Page Down by page when the find bar is closed
 - **Live Reload** - Auto-refresh on file changes (enabled by default)

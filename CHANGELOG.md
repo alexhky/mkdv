@@ -9,6 +9,10 @@ All notable changes to mkdv will be documented in this file.
 - Split whole-app `scaling` from Markdown viewer zoom. Touchpad pinch and
   Ctrl+wheel now zoom the viewer smoothly around the pointer, while a middle
   drag pans the zoomed page without activating links.
+- Viewer zoom now accepts raw native pinch/Ctrl-wheel input, keeps smooth
+  touchpad scrolling diagonal instead of applying an extra vertical correction,
+  and clamps the readable viewer range to 75%–300%. Mermaid diagrams use the
+  same scaled media transform and aspect-ratio cap as the Markdown layout.
 
 ## [0.1.15] - 2026-07-23
 
