@@ -265,6 +265,55 @@ egui::Frame::none()
 **Why both?** Reduced grab radius alone isn't enough. The 3px margin provides physical separation without creating a visible gap (8px was too much and created a black gap).
 **Files:** `src/main.rs`
 
+### winit has no touchpad gesture backend on Linux — bind the Wayland protocol yourself
+**Context:** "Pinch to zoom does not work." Everything looked correctly wired, and a
+plausible-sounding comment claimed "Linux touchpads deliver pinch as Ctrl+wheel."
+**Gotcha:** They don't. `grep -r gesture` over `winit/src/platform_impl/linux/` returns
+nothing: `WindowEvent::PinchGesture` is macOS-only, so `egui::Event::Zoom` never arrives
+on X11 or Wayland and a bare pinch is invisible to the process. Dumping raw events
+confirmed it — zero `Zoom` events during a pinch, only `MouseWheel`.
+**Fix:** Wayland compositors *do* deliver pinch through `zwp_pointer_gestures_v1`
+(mutter advertises it at v3). Bind it directly. The trick is that pointer focus is
+per-*client*, not per-`wl_pointer`: create a second `wl_seat`/`wl_pointer` on winit's own
+connection (`Backend::from_foreign_display` with the `wl_display` from
+`CreationContext::display_handle()`), attach a pinch object to it, and dispatch on a
+private event queue in a dedicated thread. A *separate connection* would not work — it
+owns no surfaces, so it would never receive focus.
+**Verify before believing a doc:** list the compositor's globals; if
+`zwp_pointer_gestures_v1` is absent, the gesture genuinely cannot be delivered.
+**Files:** `src/pinch.rs`, `Cargo.toml`
+
+### Continuous zoom must snap to a ladder, or every frame re-rasterizes glyphs
+**Context:** Pinch worked but felt chunky compared to a browser.
+**Gotcha:** Each distinct viewer zoom re-wraps the whole document *and* makes egui
+rasterize a fresh glyph set at the new font sizes. Browsers avoid this by scaling an
+already-rasterized layer; egui has no such path.
+**Fix:** Snap zoom to a geometric ladder (`VIEWER_ZOOM_STEP = 1.02`, ~65 levels over
+75%–300%) so repeated gestures replay cached levels. Accumulate the gesture into a
+separate unsnapped target first — a single pinch update is far smaller than one step, so
+rounding each update in isolation discards the entire gesture and nothing ever moves.
+**Files:** `src/main.rs`
+
+### `raw_scroll_delta` still contains Ctrl+wheel deltas that were consumed as zoom
+**Context:** Ctrl+scroll zooming also scrolled the document.
+**Gotcha:** egui's `InputState` adds every wheel event to `raw_scroll_delta` *before*
+deciding it is a zoom (`input_state/mod.rs`: `raw_scroll_delta += delta` precedes the
+`is_zoom` branch). Only `smooth_scroll_delta` is withheld. Any code reading
+`raw_scroll_delta` directly must gate on the zoom modifier itself.
+**Files:** `src/main.rs`
+
+### Middle-button drag starts a text selection — strip the event, don't check for it
+**Context:** Middle-drag panning also highlighted text.
+**Gotcha:** egui's label selection begins on `i.pointer.any_pressed()`, which includes
+the middle button (`text_selection/label_text_selection.rs`). No widget-level flag turns
+that off.
+**Fix:** Remove the middle `Event::PointerButton` press/release pair in
+`raw_input_hook` before `InputState` sees it, and track the button state yourself.
+Restrict stripping to the viewer rect (captured from the previous frame) so
+middle-click-to-close still works on tabs and in the explorer, and swallow the matching
+release wherever it lands so egui never sees an unpaired release.
+**Files:** `src/main.rs`
+
 ---
 
 ## Custom Tab System

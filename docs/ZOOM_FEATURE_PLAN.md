@@ -18,13 +18,22 @@ the Markdown viewer:
   multiplied by the viewer zoom.
 - `CommonMarkViewer::content_scale` scales its layout widths as well, allowing
   wide content to remain pannable instead of shrinking the application UI.
-- Native `Event::Zoom` input and raw Ctrl/Cmd-wheel deltas provide smooth
-  touchpad pinch on platforms that expose a pinch event and on Linux systems
-  that synthesize pinch as Ctrl+wheel. Input is accepted only while the pointer
-  is over the viewer, so sidebars and menus are unaffected.
-- Point-unit touchpad scrolling remains a direct two-axis translation. The
-  renderer consumes the gesture vector as-is; the viewer does not add a
-  second vertical-only correction after the scroll area runs.
+- Three input sources feed the zoom, in priority order: touchpad pinch
+  (`src/pinch.rs`), native `Event::Zoom`, and raw Ctrl/Cmd-wheel deltas.
+  Input is accepted only while the pointer is over the viewer, so sidebars
+  and menus are unaffected.
+- Touchpad pinch does **not** come from winit. winit has no gesture backend on
+  Linux, so `src/pinch.rs` binds `zwp_pointer_gestures_v1` itself on winit's own
+  Wayland connection. X11 has no gesture protocol and falls back to Ctrl+wheel.
+- Zoom snaps to a geometric ladder (`VIEWER_ZOOM_STEP`, 2% per level). Each
+  distinct zoom forces a full re-wrap plus glyph re-rasterization, so limiting
+  the number of levels is what keeps a pinch smooth. Gestures accumulate into
+  an unsnapped `viewer_zoom_target`, because one pinch update is far smaller
+  than one ladder step.
+- Wheel and touchpad scrolling get an explicit speed pass after the scroll area
+  runs (`VIEWER_SCROLL_SPEED`, overridable with `MKDV_SCROLL_SPEED`). It applies
+  to both axes so a diagonal gesture keeps its direction, and it is what keeps
+  scrolling working during a text-selection drag.
 - The current document position under the pointer is preserved using the old
   and new content extents on both axes.
 - The viewer exposes both scroll axes. Holding the middle mouse button and
@@ -39,5 +48,5 @@ readable.
 
 The pure scroll-anchor helper is unit-tested. The integration path is covered
 by the normal Cargo test, format, Clippy, and package checks; interactive
-verification should include pinch, Ctrl-wheel, pointer anchoring, middle-drag,
-and ordinary scrolling at 100% viewer zoom.
+verification should include pinch (Wayland), Ctrl-wheel, pointer anchoring,
+middle-drag, and ordinary scrolling at 100% viewer zoom.

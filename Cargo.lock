@@ -3576,9 +3576,13 @@ dependencies = [
  "mimalloc",
  "notify",
  "notify-debouncer-mini",
+ "raw-window-handle",
  "regex",
  "rfd",
  "serde",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

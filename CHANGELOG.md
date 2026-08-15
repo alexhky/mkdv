@@ -9,10 +9,26 @@ All notable changes to mkdv will be documented in this file.
 - Split whole-app `scaling` from Markdown viewer zoom. Touchpad pinch and
   Ctrl+wheel now zoom the viewer smoothly around the pointer, while a middle
   drag pans the zoomed page without activating links.
-- Viewer zoom now accepts raw native pinch/Ctrl-wheel input, keeps smooth
-  touchpad scrolling diagonal instead of applying an extra vertical correction,
-  and clamps the readable viewer range to 75%–300%. Mermaid diagrams use the
-  same scaled media transform and aspect-ratio cap as the Markdown layout.
+- Viewer zoom now accepts raw native pinch/Ctrl-wheel input and clamps the
+  readable viewer range to 75%–300%. Mermaid diagrams use the same scaled media
+  transform and aspect-ratio cap as the Markdown layout.
+- Touchpad pinch-to-zoom now works on Wayland. winit exposes no touchpad
+  gestures on Linux, so mkdv binds `zwp_pointer_gestures_v1` on winit's own
+  connection. X11 has no gesture protocol and continues to use Ctrl+Scroll.
+- Viewer zoom snaps to a 2% ladder so a pinch replays cached layout and glyph
+  levels instead of re-wrapping and re-rasterizing at every intermediate value.
+
+### Bug Fixes
+
+- Restore touchpad scrolling speed. Point-unit touchpad input was excluded from
+  the viewer's scroll pass, which halved it; the pass now runs for all wheel
+  input and applies to both axes so diagonal gestures keep their direction.
+  Speed is tunable with `MKDV_SCROLL_SPEED`.
+- Middle-button drag over the viewer no longer selects text. The press/release
+  pair is stripped before egui's label selection, which starts on *any* pointer
+  button, can see it. Middle-click still closes tabs and opens explorer files.
+- Ctrl+Scroll zooming no longer also scrolls the document: egui keeps zoom
+  deltas in `raw_scroll_delta`, so the viewer's scroll pass now skips them.
 
 ## [0.1.15] - 2026-07-23
 
