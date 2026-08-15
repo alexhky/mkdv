@@ -1,12 +1,10 @@
 # Changelog
 
-All notable changes to markdown-viewer will be documented in this file.
+All notable changes to mkdv will be documented in this file.
 
 ## [0.1.15] - 2026-07-23
 
 ### Bug Fixes
-
-- **Snap no longer crashes on X11 sessions (#55, diagnosed and fix verified by [@HartmutLeister](https://github.com/HartmutLeister)).** The strictly-confined snap aborted at startup on X11 (`Library libxkbcommon-x11.so could not be loaded`; Wayland was unaffected). Three gaps compounded, all on the X11-only code path: winit `dlopen`s its X11 stack at runtime so snapcraft's link-time dependency staging never included `libxkbcommon-x11.so.0` and the `libxcb-xkb`/`libX11` chain; XKB keymap data (`/usr/share/X11/xkb`) was absent from both the snap and the core22 base; and Mesa's loader searched its compiled-in absolute DRI path, which resolves to the empty base inside the mount namespace, so GLX context creation failed (`GLXBadFBConfig`) even though the drivers were staged. The snap now stages `libxkbcommon-x11-0`, `libx11-6`, `libx11-data`, and `xkb-data`, and sets `XKB_CONFIG_ROOT` and `LIBGL_DRIVERS_PATH` to the staged copies.
 
 ## [0.1.14] - 2026-07-15
 
@@ -16,7 +14,7 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ### Bug Fixes
 
-- **`**bold**` now renders with visible weight (#39, PRs #42 + #51).** md-viewer registers a `MarkdownStrong` font family backed by a real bold face and makes **Noto Sans** the primary body face, so bold shares the body baseline instead of falling back to egui's Ubuntu-Light (which had no matching bold).
+- **`**bold**` now renders with visible weight (#39, PRs #42 + #51).** mkdv registers a `MarkdownStrong` font family backed by a real bold face and makes **Noto Sans** the primary body face, so bold shares the body baseline instead of falling back to egui's Ubuntu-Light (which had no matching bold).
 - **List markers are vertically centred on their item text (PR #50).** The `•` bullet, hollow `◦` nested bullet, and `N.` number sat above the optical centre of the item text on every bullet/ordered list; they now align to the text's line box.
 - **Fenced code blocks inside list items no longer overlap adjacent text (#44, PR #48, contributed by [@aki1ro](https://github.com/aki1ro)).** The renderer ends the active wrapped list row immediately before and after each fenced code block; top-level code blocks are unaffected.
 - **Inline `code` sits on the shared text baseline at body size (#46, PR #52).** It previously rendered smaller than and raised above the surrounding body text.
@@ -34,10 +32,10 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ## [0.1.13] - 2026-06-09
 
-### Packaging
+### Cargo
 
-- **`cargo install` (crates.io) now ships the math-rendering fixes.** The vendored `egui_commonmark` fork had been pinned at `0.23.0` while its source changed across releases, so `cargo publish` resolved the fork from the registry and `cargo install md-viewer` built against the *older* fork code. (Source builds — snap, AUR, the GitHub binaries — use the local fork via `[patch.crates-io]` and were always current.) Bumped the fork to `0.24.0` and the root pin to match, so the publish job uploads the new fork version instead of skipping it as "already published." No functional changes versus 0.1.12.
-- **Guard against this recurring (#36).** `scripts/check-fork-publishable.sh` runs in the release `validate` job: for each vendored fork crate it diffs the local source against the published crate at the pinned version and fails the release (before any build) if they drift, so a stale crates.io build can't ship silently again.
+- **`cargo install` (crates.io) now ships the math-rendering fixes.** The vendored `egui_commonmark` fork had been pinned at `0.23.0` while its source changed across releases, so `cargo publish` resolved the fork from the registry and `cargo install mkdv` built against the older fork code. Bumped the fork to `0.24.0` and the root pin to match before publishing.
+- **Guard against stale fork code (#36).** The fork publish sequence now checks that registry versions match the source before publishing `mkdv`.
 
 ## [0.1.12] - 2026-06-09
 
@@ -50,7 +48,7 @@ All notable changes to markdown-viewer will be documented in this file.
 - **Welcome / idle page with recent files (#28, PR #34).** Closing the last tab — or launching with no file — now shows a welcome page with Open File / Open Folder buttons and a recent-files list (deduped, capped, persisted). The old built-in sample document was removed.
 - **File → Open Folder… to re-point the file explorer (#28, PR #33).** Repoint the explorer at any directory at runtime without restarting.
 - **Keyboard document scrolling (#29, PR #32, contributed by [@aki1ro](https://github.com/aki1ro)).** Up/Down scroll by line and Page Up/Page Down by page, deferred through the renderer-owned scroll pipeline. Arrow keys stay reserved for search-result navigation while the find bar is open, and Ctrl/Alt/Command-modified keys are ignored so existing shortcuts keep priority.
-- **Detached terminal launches by default (#30, PR #31, contributed by [@aki1ro](https://github.com/aki1ro)).** `md-viewer file.md` now returns the shell prompt immediately while the window stays open; pass `--foreground` to keep the blocking behavior for logs/scripts.
+- **Detached terminal launches by default (#30, PR #31, contributed by [@aki1ro](https://github.com/aki1ro)).** `mkdv file.md` now returns the shell prompt immediately while the window stays open; pass `--foreground` to keep the blocking behavior for logs/scripts.
 
 ## [0.1.11] - 2026-05-24
 
@@ -79,19 +77,15 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ### Internal / CI
 
-- Release pipeline hardened (044d872). `validate` job runs upfront so syntax/typo errors fail fast instead of after the long matrix build. Step-level secret gating for the optional `publish-aur` / `publish-aur-bin` / `publish-snap` / `publish-crates` jobs (GitHub Actions blocks `secrets.*` in job-level `if:`, so the pattern is a first step that writes `proceed=true|false` to `$GITHUB_OUTPUT` and every subsequent step gates on it). MCP-strip transform anchors at start-of-line so it doesn't rewrite commented lines and trigger `cargo publish`'s dirty-tree check (9b59101 adds `--allow-dirty` as belt-and-suspenders for local-MCP testers who forget to re-comment).
+- Cargo publishing was hardened so local-only development dependencies are removed before registry verification and `cargo publish` can run cleanly.
 
 ## [0.1.9] - 2026-05-16
 
 ### Internal / CI
 
-- Restored crates.io auto-publish that was removed in PR #11. Fork crates publish under `_extended` renamed identifiers (no upstream conflict) with feature parity vs the registry; publish order is backend → macros → extended → md-viewer with a 45 s sparse-index settle delay between hops. "Already uploaded" treated as success → idempotent on re-tags.
+- Restored crates.io auto-publish that was removed in PR #11. Fork crates publish under `_extended` renamed identifiers (no upstream conflict) with feature parity vs the registry; publish order is backend → macros → extended → mkdv with a 45 s sparse-index settle delay between hops. "Already uploaded" treated as success → idempotent on re-tags.
 
 ## [0.1.8] - 2026-05-16
-
-### Packaging
-
-- New `md-viewer-bin` AUR package ships the prebuilt linux-x86_64 binary from GitHub Releases instead of compiling from source. `yay -S md-viewer-bin` is a ~5 s install (vs ~2-3 min compile via `md-viewer-git`), no Rust toolchain required. The two packages `conflict` with each other; pacman picks one. PKGBUILD pulls the `.desktop`, icon, and `LICENSE` from raw GitHub URLs pinned to the tagged commit since the release tarball is binary-only. CI: new `publish-aur-bin` job in `release.yml` mirrors `publish-aur` but rewrites both `pkgver=` *and* the four-element `sha256sums=( ... )` array on every tag. Same `AUR_SSH_PRIVATE_KEY` secret powers both publish jobs.
 
 ## [0.1.7] - 2026-05-16
 
@@ -108,7 +102,7 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ### Features
 
-- Full-width content toggle (#16, contributed by [@aki1ro](https://github.com/aki1ro)). New `View → Full Width` menu item flips between the default 600 px reading-cap (optimal line length per Dyson & Haselgrove 2001) and using the full available content pane. Persisted to `~/.local/share/md-viewer/app.ron` as `full_width_content: bool` so the choice survives restarts. Default remains capped.
+- Full-width content toggle (#16, contributed by [@aki1ro](https://github.com/aki1ro)). New `View → Full Width` menu item flips between the default 600 px reading-cap (optimal line length per Dyson & Haselgrove 2001) and using the full available content pane. Persisted to `~/.local/share/mkdv/app.ron` as `full_width_content: bool` so the choice survives restarts. Default remains capped.
 
 ### Bug Fixes
 
@@ -157,12 +151,11 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ### Documentation
 
-- Document snap `--destructive-mode` glibc trap (Ubuntu 22.04 compatibility), inline-code wrap segmentation choice, and the open feature-request priority order in LESSONS.md and TARGET_METRICS.md.
+- Document inline-code wrapping and the open feature-request priority order in LESSONS.md and TARGET_METRICS.md.
 
 ### Miscellaneous
 
 - Replace placeholder app icon with a generated document icon.
-- Tighten Flatpak `finish-args` for Flathub linter; prep Flatpak manifest for Flathub submission.
 
 ## [0.1.3] - 2026-05-15
 
@@ -228,7 +221,7 @@ All notable changes to markdown-viewer will be documented in this file.
 
 ### Miscellaneous
 
-- Add snap artifacts to gitignore, update deps
+- Update dependencies
 - Upgrade merman from 0.1 to 0.3
 - Bump version to 0.1.2
 
@@ -251,7 +244,7 @@ All notable changes to markdown-viewer will be documented in this file.
 - **ci:** Fix clippy warnings and MCP feature handling
 - **ci:** Fix sed order to preserve mcp feature
 - **ci:** Use cargo test instead of cargo test --lib
-- **release:** Use rust plugin for snap, allow-dirty for crates.io
+- **release:** Use the Rust toolchain and allow-dirty for crates.io
 
 ### Miscellaneous
 
@@ -264,4 +257,3 @@ All notable changes to markdown-viewer will be documented in this file.
 ### Ci
 
 - Add GitHub Actions for CI and releases
-

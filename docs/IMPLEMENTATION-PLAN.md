@@ -2,6 +2,13 @@
 
 This document provides a detailed implementation plan for adding markdown file link support to the markdown viewer, progressing through four phases of increasing complexity.
 
+> **Status: historical design document.** The current application shipped Phase
+> D link navigation and a custom version of Phase B's tab system. The Phase A
+> multi-window prototype was superseded, and Phase C is not implemented. The
+> examples and unchecked checklists below preserve the original design process;
+> use `docs/ARCHITECTURE.md`, `docs/KEYBOARD_SHORTCUTS.md`, and `src/main.rs` as
+> the authoritative description of current behavior.
+
 ## Table of Contents
 
 1. [Phase D: Simple Link Handler](#phase-d-simple-link-handler)

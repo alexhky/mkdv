@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "mcp")]
 use egui_mcp_bridge::{McpBridge, McpUiExt};
 
-const APP_KEY: &str = "md-viewer-state";
+const APP_KEY: &str = "mkdv-state";
+const DESKTOP_ENTRY_TEMPLATE: &str = include_str!("../data/mkdv.desktop");
 
 // Welcome page recent-files: how many to keep, and how many to show before "Show more".
 const RECENT_FILES_CAP: usize = 20;
@@ -1304,7 +1305,7 @@ fn setup_fonts(ctx: &egui::Context) {
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Parser, Debug)]
-#[command(name = "md-viewer")]
+#[command(name = "mkdv")]
 #[command(about = "A lightweight markdown viewer", long_about = None)]
 struct Args {
     /// Markdown file to open
@@ -1317,6 +1318,10 @@ struct Args {
     /// Keep the GUI process attached to the terminal for debugging/logs
     #[arg(long)]
     foreground: bool,
+
+    /// Register mkdv in the user's GNOME application launcher and exit
+    #[arg(long)]
+    install_desktop: bool,
 
     /// Internal marker used by the detached child process to avoid respawn loops
     #[arg(long, hide = true)]
@@ -1380,14 +1385,73 @@ fn spawn_detached_child() -> io::Result<()> {
     Ok(())
 }
 
+/// Escape an executable path for the quoted `Exec=` value in a desktop entry.
+fn desktop_exec_path(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .chars()
+        .flat_map(|character| match character {
+            '\\' | '"' | '`' | '$' => ['\\', character].into_iter().collect::<Vec<_>>(),
+            character => [character].into_iter().collect::<Vec<_>>(),
+        })
+        .collect::<String>();
+    format!("\"{escaped}\"")
+}
+
+fn desktop_entry_contents(executable: &Path) -> String {
+    DESKTOP_ENTRY_TEMPLATE.replace(
+        "Exec=mkdv %f",
+        &format!("Exec={} %f", desktop_exec_path(executable)),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+
+    let applications_dir = data_home.join("applications");
+    fs::create_dir_all(&applications_dir)?;
+
+    let executable = std::env::current_exe()?;
+    let desktop_path = applications_dir.join("mkdv.desktop");
+    fs::write(&desktop_path, desktop_entry_contents(&executable))?;
+    Ok(Some(desktop_path))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
+    Ok(None)
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
 
+    if args.install_desktop {
+        match install_desktop_entry() {
+            Ok(Some(path)) => println!("Installed GNOME application entry at {}", path.display()),
+            Ok(None) => println!("Desktop launcher registration is only supported on Linux"),
+            Err(err) => {
+                eprintln!("Failed to install GNOME application entry: {err}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Err(err) = install_desktop_entry() {
+        log::warn!("Could not register GNOME application entry: {err}");
+    }
+
     if should_detach(&args, launched_from_terminal()) {
         if let Err(err) = spawn_detached_child() {
-            eprintln!("Failed to detach md-viewer process: {err}. Running in foreground.");
+            eprintln!("Failed to detach mkdv process: {err}. Running in foreground.");
         } else {
             return Ok(());
         }
@@ -1402,12 +1466,13 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([optimal_width, OPTIMAL_WINDOW_HEIGHT])
             .with_min_inner_size([400.0, 300.0])
             .with_title("Markdown Viewer")
+            .with_app_id("mkdv")
             .with_drag_and_drop(true),
         ..Default::default()
     };
 
     eframe::run_native(
-        "md-viewer",
+        "mkdv",
         options,
         Box::new(move |cc| Ok(Box::new(MarkdownApp::new(cc, args.file, !args.no_watch)))),
     )
@@ -4566,32 +4631,32 @@ mod tests {
 
     #[test]
     fn default_terminal_launch_detaches() {
-        let args = Args::try_parse_from(["md-viewer", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "README.md"]).unwrap();
         assert!(should_detach(&args, true));
     }
 
     #[test]
     fn non_terminal_launch_does_not_detach() {
-        let args = Args::try_parse_from(["md-viewer", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "README.md"]).unwrap();
         assert!(!should_detach(&args, false));
     }
 
     #[test]
     fn foreground_flag_disables_detach() {
-        let args = Args::try_parse_from(["md-viewer", "--foreground", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "--foreground", "README.md"]).unwrap();
         assert!(!should_detach(&args, true));
     }
 
     #[test]
     fn hidden_no_detach_marker_disables_detach() {
-        let args = Args::try_parse_from(["md-viewer", "--no-detach", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "--no-detach", "README.md"]).unwrap();
         assert!(!should_detach(&args, true));
     }
 
     #[test]
     fn child_args_preserve_user_args_and_append_marker() {
         let child_args = child_args_with_no_detach([
-            OsString::from("md-viewer"),
+            OsString::from("mkdv"),
             OsString::from("README.md"),
             OsString::from("--no-watch"),
         ]);
@@ -4609,7 +4674,7 @@ mod tests {
     #[test]
     fn child_args_insert_marker_before_double_dash() {
         let child_args = child_args_with_no_detach([
-            OsString::from("md-viewer"),
+            OsString::from("mkdv"),
             OsString::from("--"),
             OsString::from("README.md"),
         ]);
@@ -4630,7 +4695,24 @@ mod tests {
 
         let help = Args::command().render_long_help().to_string();
         assert!(help.contains("--foreground"));
+        assert!(help.contains("--install-desktop"));
         assert!(!help.contains("--no-detach"));
+    }
+
+    #[test]
+    fn desktop_entry_uses_the_installed_executable_path() {
+        let contents = desktop_entry_contents(Path::new("/home/alice/.cargo/bin/mkdv"));
+        assert!(contents.contains("Exec=\"/home/alice/.cargo/bin/mkdv\" %f"));
+        assert!(contents.contains("StartupWMClass=mkdv"));
+    }
+
+    #[test]
+    fn desktop_exec_path_quotes_special_characters() {
+        let path = Path::new("/home/alice/Apps/$notes\\viewer\"v1/mkdv");
+        assert_eq!(
+            desktop_exec_path(path),
+            "\"/home/alice/Apps/\\$notes\\\\viewer\\\"v1/mkdv\""
+        );
     }
 
     #[test]

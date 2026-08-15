@@ -203,7 +203,7 @@ CommonMarkViewer::new()
 ### Project Structure
 
 ```
-markdown-viewer/worktrees/fix/
+mkdv/worktrees/fix/
 ├── Cargo.toml                    # Points to local crate
 ├── crates/
 │   └── egui_commonmark/          # Vendored fork
@@ -262,7 +262,7 @@ egui_commonmark = { path = "crates/egui_commonmark/egui_commonmark", features = 
    - Apply `TextFormat.line_height` for paragraphs
    - Add `ui.add_space()` calls for paragraph/heading spacing
 
-5. **Update markdown-viewer to use new API**
+5. **Update mkdv to use new API**
    ```rust
    CommonMarkViewer::new()
        .line_height(1.5)

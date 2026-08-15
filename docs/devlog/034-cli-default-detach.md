@@ -6,7 +6,7 @@
 
 ## Summary
 
-Issue #30 reports that launching `md-viewer README.md` from a terminal keeps the shell occupied until the GUI window closes. Root cause: `src/main.rs` runs `eframe::run_native` in the foreground process. Desktop-file launch already avoids this because `data/md-viewer.desktop` uses `Terminal=false`.
+Issue #30 reports that launching `mkdv README.md` from a terminal keeps the shell occupied until the GUI window closes. Root cause: `src/main.rs` runs `eframe::run_native` in the foreground process. Desktop-file launch already avoids this because `data/mkdv.desktop` uses `Terminal=false`.
 
 This change makes terminal launches detach by default while preserving `--foreground` for debugging and log capture.
 
@@ -49,10 +49,10 @@ Clap treats arguments after `--` as positional values. The hidden `--no-detach` 
 - `cargo test` — PASS; 22 tests passed.
 - `cargo clippy --all-targets` — PASS with existing vendored warnings for unused `max_width`, deprecated `allocate_ui_at_rect`, and an unused patch notice.
 - `cargo build` — PASS with existing vendored warnings.
-- `target/debug/md-viewer --help` — PASS; help includes `--foreground` and hides `--no-detach`.
-- `timeout 3s target/debug/md-viewer --foreground <tmp.md>` — PASS; command stayed attached until timeout exit 124.
-- `timeout 3s target/debug/md-viewer --no-detach <tmp.md>` — PASS; hidden child path stayed attached until timeout exit 124.
-- `script -q -c "target/debug/md-viewer <tmp.md>" /dev/null` — PASS; parent exited with code 0 under a pseudo-terminal and child process was observable before cleanup.
+- `target/debug/mkdv --help` — PASS; help includes `--foreground` and hides `--no-detach`.
+- `timeout 3s target/debug/mkdv --foreground <tmp.md>` — PASS; command stayed attached until timeout exit 124.
+- `timeout 3s target/debug/mkdv --no-detach <tmp.md>` — PASS; hidden child path stayed attached until timeout exit 124.
+- `script -q -c "target/debug/mkdv <tmp.md>" /dev/null` — PASS; parent exited with code 0 under a pseudo-terminal and child process was observable before cleanup.
 - `git diff --check` — PASS.
 
 ## Future Improvements

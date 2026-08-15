@@ -7,7 +7,7 @@
 
 ## Summary
 
-Launching md-viewer hung for ~6 s before the first frame whenever the file
+Launching mkdv hung for ~6 s before the first frame whenever the file
 explorer root was a large tree (e.g. `/home/ahmet`). The watcher set up in
 `start_watching()` registered the explorer root with
 `notify::RecursiveMode::Recursive`; `notify`'s inotify backend implements
@@ -95,7 +95,7 @@ Verified on Xvfb `:99` with the debug build and an **isolated** `XDG_DATA_HOME`
   `sub/` watch fired the refresh).
 - **Tab reload:** editing the open `root.md` externally updated the rendered
   content live ("EDITED LIVE").
-- `cargo build` + `cargo clippy -p md-viewer`: clean (only pre-existing
+- `cargo build` + `cargo clippy -p mkdv`: clean (only pre-existing
   vendored-crate warnings).
 
 ## Future Improvements

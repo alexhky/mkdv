@@ -89,9 +89,6 @@ egui_commonmark_extended = { features = ["svg", "svg_text", ...] }
 **What fails:** Badges with `?logo=` parameter or embedded images
 **Workaround:** Use badges without logos, or accept the limitation
 ```markdown
-<!-- Fails (has logo) -->
-![](https://img.shields.io/badge/snap-app-blue?logo=snapcraft)
-
 <!-- Works (no logo) -->
 ![](https://img.shields.io/badge/License-MIT-blue.svg)
 ```
@@ -100,8 +97,8 @@ egui_commonmark_extended = { features = ["svg", "svg_text", ...] }
 
 ### Strong markdown needs a registered bold family for visible weight
 **Context:** Issue #39 reported that `**bold**` rendered with no visible bold difference.
-**Problem:** The renderer already called `RichText::strong()`, but egui can still lay the text out with the same regular font face. For md-viewer, visible bold requires selecting a distinct font family backed by a bold face.
-**Fix:** Keep `RichText::strong()` for the semantic hint, add an opt-in `use_strong_font_family` option, register `STRONG_FONT_FAMILY` (`MarkdownStrong`) in `setup_fonts`, and enable the option only in md-viewer's viewer builder:
+**Problem:** The renderer already called `RichText::strong()`, but egui can still lay the text out with the same regular font face. For mkdv, visible bold requires selecting a distinct font family backed by a bold face.
+**Fix:** Keep `RichText::strong()` for the semantic hint, add an opt-in `use_strong_font_family` option, register `STRONG_FONT_FAMILY` (`MarkdownStrong`) in `setup_fonts`, and enable the option only in mkdv's viewer builder:
 ```rust
 CommonMarkViewer::new()
     .use_strong_font_family(true)
@@ -324,7 +321,7 @@ if watcher_error && recovery_count < 3 {
 **Files:** `src/main.rs`
 
 ### Recursive watch of the explorer root froze startup (~6s) proportional to tree size
-**Context:** Launching md-viewer hung ~6s before the first frame whenever the file explorer root was a large tree. With `explorer_root = /home/ahmet` (454,709 dirs), KDE DrKonqi recorded an "application-not-responding" marker at the exact launch time.
+**Context:** Launching mkdv hung ~6s before the first frame whenever the file explorer root was a large tree. With `explorer_root = /home/ahmet` (454,709 dirs), KDE DrKonqi recorded an "application-not-responding" marker at the exact launch time.
 **Root cause:** `start_watching()` registered the explorer root with `notify::RecursiveMode::Recursive`. notify's inotify backend implements recursive watching by **walking the entire subtree and issuing one `inotify_add_watch` per directory, synchronously on the calling thread**. `start_watching()` runs inside `MarkdownApp::new()` *before* the eframe event loop, so the walk blocked the first paint. A cache-warm walk of `/home/ahmet` alone measured 6.11s; the watch also consumed ~87% of `max_user_watches` (524,288). The document being opened was irrelevant — any file triggered it.
 **Two things to keep separate:** the explorer *scan* (`scan_directory_shallow`) is already lazy/one-level and fine; only the *watch* recursed everything.
 **Fix:** Watch the root **plus each currently-expanded directory, non-recursively** — mirroring the lazy tree. A non-recursive inotify watch on dir `D` reports create/delete/modify of `D`'s direct entries, which is exactly what's visible. Keep watches in sync on expand/collapse via a new `reconcile_explorer_watches()` (incremental add/remove diff, same pattern as `update_watched_paths`), called after `toggle_expanded`/`expand_all`/`collapse_all`.
@@ -393,7 +390,7 @@ let target_path = target_path.canonicalize()?;  // Resolves ../
 **Context:** Managing multiple feature branches
 **Structure:**
 ```
-~/markdown-viewer/
+~/mkdv/
 ├── .bare/           # Git database
 └── worktrees/
     ├── main/        # Main branch
@@ -480,77 +477,29 @@ ctx.request_repaint_after(Duration::from_millis(50)); // NOT request_repaint()
 
 ---
 
-## Distribution / CI / Packaging
-
-### GitHub Actions blocks `secrets.*` AND `env.*` in job-level `if:`
-**Context:** Wiring an optional `publish-aur` job gated on `AUR_SSH_PRIVATE_KEY` being set
-**Problem:** `if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}` caused the whole workflow file to fail validation (no jobs run, "workflow file issue" with 0s duration). Switching to `if: ${{ env.AUR_SSH_KEY != '' }}` also fails — only `github`, `needs`, `vars`, and `inputs` contexts are allowed in job-level `if:`.
-**Fix:** Gate at step level instead. First step always succeeds, reads the secret, writes `proceed=true|false` to `$GITHUB_OUTPUT`. Every subsequent step has `if: steps.check.outputs.proceed == 'true'`. The job shows green with a notice when the secret is unset.
-```yaml
-- name: Check secret
-  id: check
-  env:
-    AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-  run: |
-    if [ -z "$AUR_SSH_KEY" ]; then
-      echo "proceed=false" >> "$GITHUB_OUTPUT"
-    else
-      echo "proceed=true" >> "$GITHUB_OUTPUT"
-    fi
-- uses: actions/checkout@v4
-  if: steps.check.outputs.proceed == 'true'
-```
-**Files:** `.github/workflows/release.yml`
-
-### Docker bind-mount `chown` breaks host runner ownership
-**Context:** Regenerating `.SRCINFO` inside a containerized `archlinux/archlinux:base-devel` because `makepkg` refuses to run as root
-**Problem:** After `docker run --rm -v "$PWD/aur-repo:/pkg" ... bash -c 'useradd -m builder && chown -R builder /pkg && sudo -u builder makepkg --printsrcinfo'`, the next host step failed with `error: could not lock config file .git/config: Permission denied`. The container's `chown -R builder` propagates through the bind mount, so the host runner can no longer write inside `aur-repo`.
-**Fix:** Restore ownership to the runner immediately after the container exits:
-```yaml
-- name: Restore aur-repo ownership to runner
-  run: sudo chown -R "$(id -u):$(id -g)" aur-repo
-```
-**Files:** `.github/workflows/release.yml`
-
-### GitHub macos-13 (Intel) runners have multi-minute queue waits
-**Context:** Cross-platform release matrix including `macos-13` for Intel Mac users
-**Problem:** v0.1.3 release run sat queued 24+ minutes for an Intel Mac runner while linux/macos-arm64/windows finished. The free macOS-13 runner pool is heavily contended.
-**Fix:** Drop Intel Mac from the matrix. Modern Macs are all Apple Silicon — `aarch64-apple-darwin` covers the bulk. Direct Intel Mac users to `cargo install`.
-**Files:** `.github/workflows/release.yml`
+## Cargo publishing and CI
 
 ### Vendored forks must publish to crates.io with feature parity, under renamed identifiers
 **Context:** Restoring crates.io auto-publish after it was removed in PR #11.
 **Problem:** `cargo publish` ignores `[patch.crates-io]` during its verify step (resolves deps against the registry directly). If the registry version of a patched crate lacks a feature the consumer asks for, publish fails:
 ```
-package `md-viewer` depends on `egui_commonmark_extended` with feature `math`
+package `mkdv` depends on `egui_commonmark_extended` with feature `math`
 but `egui_commonmark_extended` does not have that feature
 ```
-**Fix:** Publish the vendored fork under renamed identifiers (`*_extended` suffix here) so they don't conflict with upstream `lampsitter/egui_commonmark`, and *keep registry feature parity*. When you add a feature to the local fork, bump the fork's workspace version and publish the new version *before* tagging md-viewer — otherwise md-viewer's publish-verify will fail against the older registry version.
-**Operational details (see `scripts/publish-crates.sh` + `publish-crates` job in `release.yml`):**
-- Publish order: backend → macros → extended → md-viewer.
+**Fix:** Publish the vendored fork under renamed identifiers (`*_extended` suffix here) so they don't conflict with upstream `lampsitter/egui_commonmark`, and *keep registry feature parity*. When you add a feature to the local fork, bump the fork's workspace version and publish the new version *before* tagging mkdv — otherwise mkdv's publish-verify will fail against the older registry version.
+**Operational details (see `scripts/publish-crates.sh`):**
+- Publish order: backend → macros → extended → mkdv.
 - Sparse-index settle delay (45 s) between publishes — otherwise dependents fail to resolve the new version.
 - "Already uploaded" treated as success → idempotent on re-tags.
 - `[patch.crates-io]` stays in root `Cargo.toml`. It's neutral for publish (ignored) and keeps local dev fast when iterating between fork bumps.
 - Pitfall: git URLs are NOT a workaround — `cargo publish` rejects any dep not on crates.io.
-**Files:** `Cargo.toml`, `crates/egui_commonmark/Cargo.toml`, `.github/workflows/release.yml`, `scripts/publish-crates.sh`, `PUBLISHING.md`
-
-### Flathub linter rejects `--filesystem=home:ro` (exception pattern)
-**Context:** Tightening sandbox permissions for the Flatpak manifest
-**Problem:** `flatpak-builder-lint` flags `finish-args-home-ro-filesystem-access` as an error for `--filesystem=home:ro`. Stricter alternatives (`xdg-documents` only) break CLI invocation outside `~/Documents` and live reload for arbitrary paths. `--filesystem=host:ro` is also flagged (worse — exposes `/etc`, `/usr`).
-**Fix:** Keep `--filesystem=home:ro` (functional priority) and document the exception in the Flathub PR body. For a read-only markdown viewer that needs CLI invocation + `notify` watcher access, this is a defensible exception — reviewers grant it for similar markdown editors/viewers. Document in `PUBLISHING.md` so the next person knows the lint error is expected.
-**Files:** `flatpak/io.github.aydiler.md-viewer.yaml`, `PUBLISHING.md`
+**Files:** `Cargo.toml`, `crates/egui_commonmark/Cargo.toml`, `scripts/publish-crates.sh`, `PUBLISHING.md`
 
 ### Default-detached GUI CLIs still need a foreground escape hatch
-**Context:** Issue #30 — launching `md-viewer README.md` from a terminal kept the shell occupied until the GUI closed.
+**Context:** Issue #30 — launching `mkdv README.md` from a terminal kept the shell occupied until the GUI closed.
 **Root cause:** `eframe::run_native` runs in the foreground process. Desktop launch was unaffected because the `.desktop` file uses `Terminal=false`, but direct CLI launch behaved like any foreground command.
 **Fix:** Detect terminal launch, respawn the same executable with a hidden child marker (`--no-detach`) and null stdio, run Unix children in a new session with `setsid()`, then let the parent exit. Keep a documented `--foreground` flag so startup errors, logs, and scripts can still use blocking behavior. Insert the hidden marker before `--` so clap does not treat it as a positional file argument.
 **Files:** `src/main.rs`, `README.md`
-
-### `--talk-name=*portal*` is unnecessary for Flatpak XDG portals
-**Context:** First-pass Flatpak manifest included `--talk-name=org.freedesktop.portal.FileChooser` and `.Desktop`
-**Problem:** `flatpak-builder-lint` flags `finish-args-portal-talk-name`. Flatpak apps reach XDG portals through the standard sandbox mechanism without explicit D-Bus talk-name permissions.
-**Fix:** Remove the `--talk-name=*portal*` lines entirely. Native file dialogs (via `rfd` crate) still work through the portal mechanism.
-**Files:** `flatpak/io.github.aydiler.md-viewer.yaml`
 
 ### Pollinations.ai is the keyless image-gen fallback
 **Context:** Replacing a placeholder app icon without a Gemini/OpenAI API key
@@ -568,47 +517,7 @@ magick X.png -gravity center -crop 540x540+0+0 +repage -resize 256x256 -strip ou
 ```
 **Files:** N/A (one-off icon generation pattern)
 
-### GitHub user-level block stops Flathub PRs entirely
-**Context:** Attempting to open a PR against `flathub/flathub` from the `aydiler` account
-**Problem:** `gh pr create` returned HTTP 422 with `{"resource":"Issue","code":"custom","field":"user","message":"user is blocked"}`. Direct `curl` against the GitHub API confirms the block; org-block check (`/orgs/flathub/blocks/aydiler`) returns 404 (not org-level) so the block is at the GitHub user level — likely auto-triggered by previous activity (the account had 3 close/reopen PRs for `io.github.aydiler.msigd-gui` in January 2026).
-**Workaround:** Open a topic on Flathub Discourse (https://discourse.flathub.org/) asking for unblock; reference the closed prior PRs and the new app. The push to `aydiler/flathub:io.github.aydiler.md-viewer` branch succeeds before the PR step, so once unblocked the PR can be opened from the GitHub web UI without redoing branch work.
-**Files:** N/A (account-level state)
-
-### Strict snaps: winit dlopens its X11 stack — snapcraft staging can't see it, and staged files aren't reachable at compiled-in paths
-**Context:** Issue #55 — snap 0.1.14 aborted at startup on every X11 session (`Library libxkbcommon-x11.so could not be loaded`). Wayland unaffected, so no release since the snap's introduction caught it. Reporter (@HartmutLeister) root-caused all three layers and verified the fix combination on Ubuntu 24.04/X11.
-**Three independent gaps, all X11-only:**
-1. **dlopen'd libraries are invisible to `stage-packages` dependency resolution.** snapcraft walks the ELF `DT_NEEDED` graph; winit loads `libxkbcommon-x11.so.0` (and via it `libxcb-xkb1`/`libX11`/`libXau`/`libXdmcp`) with `dlopen()` at runtime, so none were staged. Must be listed explicitly: `libxkbcommon-x11-0`, `libx11-6`.
-2. **Data directories aren't dependencies at all.** `/usr/share/X11/xkb` (package `xkb-data`) exists in neither the snap nor core22 → winit panics `XKBNotFound` once the libs load. `libx11-data` provides Compose files (cosmetic warning otherwise).
-3. **Staged ≠ reachable.** Mesa's DRI drivers *were* staged (dep of `libgl1`) at `$SNAP/usr/lib/x86_64-linux-gnu/dri`, but Mesa searches its compiled-in absolute path `/usr/lib/x86_64-linux-gnu/dri`, which inside the strict-confinement mount namespace is the **empty core22 base** → `GLXBadFBConfig`. Anything with a baked-in search path needs its env override pointed into `$SNAP`: `LIBGL_DRIVERS_PATH=$SNAP/usr/lib/x86_64-linux-gnu/dri`, `XKB_CONFIG_ROOT=$SNAP/usr/share/X11/xkb`.
-**Fix shipped (v0.1.15, PR #56):** 4 stage-packages + 2 env vars in `snap/snapcraft.yaml`. Chosen over `extensions: [gnome]` (would fix the same gaps but drags in the whole gnome-42-2204 content snap; targeted staging keeps the snap ~7 MB).
-**Verification without an Ubuntu box:** download the published revision from the store API (`https://api.snapcraft.io/v2/snaps/info/<name>` → `channel-map[].download.url`), then `unsquashfs -l` to confirm the libs/data and check `meta/snap.yaml` carries the env block.
-**General lesson:** for any winit/egui app packaged as a strict snap without a desktop extension, smoke-test *both* display-server backends — every dlopen-based backend is a staging blind spot, and a Wayland-only test run proves nothing about X11.
-**Files:** `snap/snapcraft.yaml`, `docs/devlog/051-snap-x11-libs.md`
-
-### Never `snapcraft --destructive-mode` for releases on a glibc-newer-than-base host
-**Context:** Issue #3 — v0.1.2 snap (revision 4) failed to start on Ubuntu 24.04 with `GLIBC_2.43 not found` errors. The snapcraft.yaml declared `base: core22` (glibc 2.35), but the actual binary required GLIBC_2.43.
-**Root cause:** v0.1.2 release CI run failed; the snap was manually uploaded with `snapcraft --destructive-mode` from this Arch host (glibc 2.43). Destructive mode builds directly on the host without LXD/multipass isolation, so cargo links against host glibc — `atan2f@GLIBC_2.43`, `acosf@GLIBC_2.43` etc. get baked into the binary regardless of the declared `base:`.
-**Fix:** Only publish snaps via CI (`snapcore/action-build@v1` uses LXD with the declared base). If CI fails, fix CI — never fall back to destructive-mode upload. The v0.1.3 CI run produced revision 6, which only requires up to `GLIBC_2.35` and works on Ubuntu 22.04+.
-**Verify before upload:**
-```bash
-objdump -T target/release/md-viewer | grep -oE 'GLIBC_[0-9.]+' | sort -u | tail
-# Must not exceed the glibc of the declared `base:` in snapcraft.yaml
-# core22 → 2.35, core24 → 2.39
-```
-**Files:** `snap/snapcraft.yaml`, `.github/workflows/release.yml`
-
-### snapcraft renamed `push-metadata` → `upload-metadata` (the whole `push` verb family)
-**Context:** v0.1.14 release. The **Publish to Snap Store** job went red, but the snap itself published fine — `snapcore/action-publish@v1` logged `Revision 17 created for 'md-viewer' and released to 'stable'`. The failure was the *next* step, "Push snap store listing metadata", which runs `snapcraft push-metadata "${SNAP_FILE}" --force`:
-```
-Error: no such command 'push-metadata', maybe you meant 'upload-metadata'
-```
-**Root cause:** the step does `sudo snap install snapcraft --classic` (tracks *latest*), and newer snapcraft renamed the entire `push` verb family to `upload` (`push` → `upload`, `push-metadata` → `upload-metadata`). This worked at v0.1.13 (~5 weeks earlier) because the runner's snapcraft was older — **environmental drift**, not anything the release commit changed. It would now fail on every release.
-**Fix:** `snapcraft upload-metadata "${SNAP_FILE}" --force` — identical positional `<snap-file>` and `--force` flag, just the renamed verb.
-**Non-impact:** the snap upload is a *separate* step (`action-publish`) that already succeeded, so users got the new revision regardless; only the store-listing description sync (unchanged from prior releases anyway) was skipped. The overall run still shows red because of the one trailing step.
-**Guard for next time:** consider pinning `snap install snapcraft --classic --channel=8.x/stable` in this step so the verb surface can't drift out from under the release again.
-**Files:** `.github/workflows/release.yml` (Push snap store listing metadata step), `docs/devlog/050-snap-upload-metadata-verb.md`
-
-### `to_ascii_lowercase` preserves byte offsets; `to_lowercase` doesn't
+ ### `to_ascii_lowercase` preserves byte offsets; `to_lowercase` doesn't
 **Context:** Implementing case-insensitive substring search (`find_matches`) that returns byte ranges into the original content.
 **Problem:** `str::to_lowercase` does Unicode case folding which can *change byte length* (e.g. `"İ".to_lowercase() == "i̇"` — adds a combining mark). Any match offsets computed against the folded string would point at the wrong bytes in the original.
 **Fix:** Use `str::to_ascii_lowercase` on both sides. It only rewrites A–Z; non-ASCII bytes pass through untouched, so byte offsets stay 1:1 with the original.
@@ -756,29 +665,20 @@ ui.vertical(|ui| {
 **Fix:** Blind fixed-size char-count cut. Each chunk has a known upper bound (56 chars) so it always fits the column. Mid-identifier breaks are a cosmetic cost, but functionally correct at every width.
 **Files:** `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs` (`inline_code_wrap_segments`)
 
-### `publish-aur-bin` races `create-release` — pull tarball sha256 from build artifact, not Release URL
-**Context:** v0.1.8 first run. The new `publish-aur-bin` job was wired as `needs: build` so it could parallelise with `publish-snap` and `publish-aur`. Its first step `curl -fsSL ".../releases/download/v${VERSION}/md-viewer-${VERSION}-linux-x86_64.tar.gz.sha256"` failed with curl exit 22 (HTTP 4xx) in 12 seconds.
-**Root cause:** The GitHub Release isn't *created* until `create-release` runs, which is `needs: [build, publish-snap]`. publish-aur-bin had no dependency on either snap or create-release, so it raced ahead of the Release URL existing. publish-aur doesn't hit this because the source-build PKGBUILD has `sha256sums=('SKIP')` — it never fetches the release asset.
-**Fix:** Use `actions/download-artifact@v4` to pull the `release-linux-x86_64` artifact (uploaded by the `build` matrix) directly inside `publish-aur-bin`. The artifact already contains `md-viewer-VERSION-linux-x86_64.tar.gz.sha256` — the same file that later ends up on the Release page. No ordering dependency on snap or create-release.
-**Alternative considered:** `needs: create-release` — adds ~20 min serial latency (snap is slow); rejected.
-**Aux files** (`.desktop`, icon, LICENSE) still come from `raw.githubusercontent.com/aydiler/md-viewer/v${VERSION}/...` — those URLs are valid as soon as the tag is pushed, no race.
-**Recovery for the failed v0.1.8 run:** rerunning the failed job from GitHub doesn't help — `gh run rerun` uses the workflow code as it existed at tag time. Either re-tag (destructive) or push the package manually. I did the manual push; CI fix landed as `c552f10` on main for v0.1.9+.
-**Files:** `.github/workflows/release.yml` (`publish-aur-bin`)
-
-### `sed 's/^version = "0.1.7"$/.../' Cargo.lock` bumps unrelated crates
-**Context:** Releasing v0.1.8 — needed to bump `md-viewer`'s entry in `Cargo.lock` to match the new `Cargo.toml` version.
+ ### `sed 's/^version = "0.1.7"$/.../' Cargo.lock` bumps unrelated crates
+**Context:** Releasing v0.1.8 — needed to bump `mkdv`'s entry in `Cargo.lock` to match the new `Cargo.toml` version.
 **Pitfall:** `sed -i 's/^version = "0.1.7"$/version = "0.1.8"/' Cargo.lock` rewrote 5 lines, not 1. Four other crates (`crypto-common`, etc.) happened to be at `0.1.7` and silently bumped to `0.1.8` — invalid versions, would have broken builds.
-**Fix:** Use `Edit` with surrounding context to scope to the `md-viewer` block:
+**Fix:** Use `Edit` with surrounding context to scope to the `mkdv` block:
 ```
-old: name = "md-viewer"\nversion = "0.1.7"
-new: name = "md-viewer"\nversion = "0.1.8"
+old: name = "mkdv"\nversion = "0.1.7"
+new: name = "mkdv"\nversion = "0.1.8"
 ```
-Or run `cargo update -p md-viewer --precise 0.1.8` from a clean tree (slower but unambiguous).
-**Recovery:** `git checkout Cargo.lock` and redo surgically. Always `git diff Cargo.lock` after touching it — anything other than one line under `[[package]] name = "md-viewer"` is a mistake.
+Or run `cargo update -p mkdv --precise 0.1.8` from a clean tree (slower but unambiguous).
+**Recovery:** `git checkout Cargo.lock` and redo surgically. Always `git diff Cargo.lock` after touching it — anything other than one line under `[[package]] name = "mkdv"` is a mistake.
 **Files:** `Cargo.lock`
 
 ### MCP-strip Python transform must anchor regex to start-of-line
-**Context:** v0.1.9 release. After publishing the 3 fork crates, `publish-crates` failed at md-viewer's `cargo publish` with `1 files in the working directory contain changes that were not yet committed into git: Cargo.toml`.
+**Context:** v0.1.9 release. After publishing the 3 fork crates, `publish-crates` failed at mkdv's `cargo publish` with `1 files in the working directory contain changes that were not yet committed into git: Cargo.toml`.
 **Root cause:** the "Remove local-only MCP dependency" CI step used plain `str.replace`:
 ```python
 t = t.replace('mcp = ["dep:egui-mcp-bridge"]', 'mcp = []')
@@ -790,8 +690,8 @@ t = re.sub(r'(?m)^mcp\s*=\s*\["dep:egui-mcp-bridge"\]', 'mcp = []', t)
 t = re.sub(r'(?m)^egui-mcp-bridge\s*=\s*.*\n', '', t)
 ```
 Belt-and-suspenders: keep `cargo publish --allow-dirty` in `scripts/publish-crates.sh` so a future maintainer who DOES uncomment the dep for local MCP testing (and forgets to recomment before tagging) still gets a clean publish — the transform strips the uncommented lines, working dir becomes dirty, `--allow-dirty` lets the publish through.
-**Recovery for v0.1.9:** the fork crates DID publish (their working dirs were unaffected by the root Cargo.toml mutation); only md-viewer's publish failed. Manual `cargo publish` from a clean local checkout shipped 0.1.9.
-**Files:** `.github/workflows/release.yml` (build job + publish-crates job — both have the transform), `scripts/publish-crates.sh`
+**Recovery for v0.1.9:** the fork crates DID publish (their working dirs were unaffected by the root Cargo.toml mutation); only mkdv's publish failed. Manual `cargo publish` from a clean local checkout shipped 0.1.9.
+**Files:** `scripts/publish-crates.sh`
 
 ### `CHANGELOG.md` is hand-curated — do NOT `git-cliff -o CHANGELOG.md`
 **Context:** `.claude/rules/release-workflow.md` suggests running `git-cliff -o CHANGELOG.md` to generate changelog entries before tagging.
@@ -825,7 +725,7 @@ Belt-and-suspenders: keep `cargo publish --allow-dirty` in `scripts/publish-crat
 ### show_scrollable parsed pulldown on every frame
 **Context:** Naive switch to `show_scrollable` would have made scroll *slower* than `show()` did.
 **Root cause:** `show()` caches parsed events in `CommonMarkCache::cached_events` keyed by content hash (parsers/pulldown.rs:318-327). `show_scrollable` did not — it ran `Parser::new_ext(text).into_offset_iter().collect()` at line 410-413 every paint, ~52 ms at 100k lines.
-**Fix:** Extend `ScrollableCache` with `events`, `content_version`, `layout_signature`. The caller (md-viewer's `Tab`) provides a monotonic `content_version: u64` bumped on every load/reload via the new `CommonMarkViewer::content_version(v)` builder. The renderer reads it via `content_version: Option<u64>` and falls back to `hash_content(text)` when omitted. Either way, parsing happens at most once per content change — clone is ~11 ms at 100k.
+**Fix:** Extend `ScrollableCache` with `events`, `content_version`, `layout_signature`. The caller (mkdv's `Tab`) provides a monotonic `content_version: u64` bumped on every load/reload via the new `CommonMarkViewer::content_version(v)` builder. The renderer reads it via `content_version: Option<u64>` and falls back to `hash_content(text)` when omitted. Either way, parsing happens at most once per content change — clone is ~11 ms at 100k.
 **Files:** `crates/egui_commonmark/egui_commonmark_backend/src/pulldown.rs` (`ScrollableCache`), `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs` (`show_scrollable` cache-population branch)
 
 ### Selection-preserving wheel hack needs ScrollAreaOutput
@@ -879,7 +779,7 @@ total_events  // EOF before balance — defensive, can't crash
 
 ### Math-feature parser-options mismatch between `show()` and `show_scrollable()`
 **Context:** Same panic class as the nested-list bug above. Even after depth-tracking was applied, a second independent path produced the same `lib.rs:566 unreachable!()` crash.
-**Root cause:** `show()` parses with `parser_options_math(options.math_fn.is_some() || cfg!(feature = "math"))` (parsers/pulldown.rs:461). `show_scrollable()` parses with `parser_options_math(options.math_fn.is_some())` (parsers/pulldown.rs:565). md-viewer enables the `math` cargo feature, so the two parses produced *different* event streams for any document containing `$…$` (currency `$0.02`, env vars `${ENV}`, regex). Split-points were registered with indices into `cache.cached_events` (with-math, from `show()`); the viewport-skip path consumes `sc.events` (without-math, from `show_scrollable()`). The two indices diverge on real docs; iteration jumps to an unrelated event — often `Tag::Item` with no matching `Tag::List` start — panic.
+**Root cause:** `show()` parses with `parser_options_math(options.math_fn.is_some() || cfg!(feature = "math"))` (parsers/pulldown.rs:461). `show_scrollable()` parses with `parser_options_math(options.math_fn.is_some())` (parsers/pulldown.rs:565). mkdv enables the `math` cargo feature, so the two parses produced *different* event streams for any document containing `$…$` (currency `$0.02`, env vars `${ENV}`, regex). Split-points were registered with indices into `cache.cached_events` (with-math, from `show()`); the viewport-skip path consumes `sc.events` (without-math, from `show_scrollable()`). The two indices diverge on real docs; iteration jumps to an unrelated event — often `Tag::Item` with no matching `Tag::List` start — panic.
 **Fix:** mirror `show()`'s derivation in `show_scrollable()`'s parse so the two event streams are identical:
 ```rust
 let math_enabled = options.math_fn.is_some() || cfg!(feature = "math");

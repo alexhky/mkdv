@@ -48,10 +48,10 @@ The render path maps `full_width_content` to `CommonMarkViewer::default_width(No
 
 Validation:
 
-- `cargo test --manifest-path /home/akiro/Coding/md-viewer-full-width-toggle/Cargo.toml content_width -- --nocapture` — passed.
-- `cargo test --manifest-path /home/akiro/Coding/md-viewer-full-width-toggle/Cargo.toml` — passed with pre-existing warnings.
-- `cargo build --manifest-path /home/akiro/Coding/md-viewer-full-width-toggle/Cargo.toml` — passed with pre-existing warnings.
-- `cargo clippy --manifest-path /home/akiro/Coding/md-viewer-full-width-toggle/Cargo.toml` — passed with pre-existing warnings: unused `max_width` in `crates/egui_commonmark/egui_commonmark_backend/src/elements.rs:125`, deprecated `Ui::allocate_ui_at_rect` in `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs:884`, and unused patch `egui_commonmark_macros_extended`.
+- `cargo test --manifest-path /home/akiro/Coding/mkdv-full-width-toggle/Cargo.toml content_width -- --nocapture` — passed.
+- `cargo test --manifest-path /home/akiro/Coding/mkdv-full-width-toggle/Cargo.toml` — passed with pre-existing warnings.
+- `cargo build --manifest-path /home/akiro/Coding/mkdv-full-width-toggle/Cargo.toml` — passed with pre-existing warnings.
+- `cargo clippy --manifest-path /home/akiro/Coding/mkdv-full-width-toggle/Cargo.toml` — passed with pre-existing warnings: unused `max_width` in `crates/egui_commonmark/egui_commonmark_backend/src/elements.rs:125`, deprecated `Ui::allocate_ui_at_rect` in `crates/egui_commonmark/egui_commonmark/src/parsers/pulldown.rs:884`, and unused patch `egui_commonmark_macros_extended`.
 
 ## Future Improvements
 

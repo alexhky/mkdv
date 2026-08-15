@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/ahmet/markdown-viewer/.claude/hooks/branch-protect.sh",
+            "command": "/home/ahmet/mkdv/.claude/hooks/branch-protect.sh",
             "timeout": 5
           }
         ]

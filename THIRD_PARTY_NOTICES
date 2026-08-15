@@ -4,7 +4,7 @@ Third-Party Notices
 emojis 0.9.0
 ------------
 
-md-viewer uses the `emojis` crate for GitHub/gemoji shortcode lookup data.
+mkdv uses the `emojis` crate for GitHub/gemoji shortcode lookup data.
 The crate is licensed under:
 
     (MIT OR Apache-2.0) AND Unicode-3.0

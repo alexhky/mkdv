@@ -171,7 +171,7 @@ impl Style {
         typography: Option<&TypographyConfig>,
     ) -> RichText {
         // Public low-level helper remains safe by default for library users
-        // who did not register md-viewer's named strong font family.
+        // who did not register mkdv's named strong font family.
         self.to_richtext_internal(ui, text, typography, false)
     }
 
@@ -245,7 +245,7 @@ impl Style {
         }
 
         if self.strong {
-            // Always keep egui's strong styling hint. Only md-viewer opts into
+            // Always keep egui's strong styling hint. Only mkdv opts into
             // the named bold font after registering it; inline code keeps the
             // monospace family applied later by `RichText::code()`.
             rich_text = rich_text.strong();
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn default_strong_style_does_not_select_markdown_strong_family() {
-        // Generic egui_commonmark consumers have not registered the md-viewer
+        // Generic egui_commonmark consumers have not registered the mkdv
         // named family, so the backend default must stay on egui's built-in
         // strong styling instead of emitting an unregistered font family.
         egui::__run_test_ui(|ui| {
@@ -325,14 +325,14 @@ mod tests {
             assert_ne!(
                 strong_format.font_id.family,
                 egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
-                "default strong markdown must not emit the md-viewer-only font family"
+                "default strong markdown must not emit the mkdv-only font family"
             );
         });
     }
 
     #[test]
     fn opt_in_strong_style_selects_distinct_markdown_strong_font() {
-        // Issue #39: md-viewer opts into a registered bold face so markdown
+        // Issue #39: mkdv opts into a registered bold face so markdown
         // strong/bold produces an inspectable font formatting change.
         egui::__run_test_ui(|ui| {
             let mut options = CommonMarkOptions::default();
@@ -355,14 +355,14 @@ mod tests {
             assert_eq!(
                 strong_format.font_id.family,
                 egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
-                "opt-in strong markdown should use the registered md-viewer strong family"
+                "opt-in strong markdown should use the registered mkdv strong family"
             );
         });
     }
 
     #[test]
     fn strong_code_keeps_monospace_font_family() {
-        // Even with md-viewer's strong-font opt-in, strong inline code should
+        // Even with mkdv's strong-font opt-in, strong inline code should
         // keep the same monospace/code font family as normal inline code.
         egui::__run_test_ui(|ui| {
             let mut options = CommonMarkOptions::default();

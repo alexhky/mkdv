@@ -3358,25 +3358,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "md-viewer"
-version = "0.1.15"
-dependencies = [
- "clap",
- "eframe",
- "egui",
- "egui_commonmark_extended",
- "env_logger",
- "image",
- "log",
- "mimalloc",
- "notify",
- "notify-debouncer-mini",
- "regex",
- "rfd",
- "serde",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3579,6 +3560,25 @@ dependencies = [
  "serde",
  "serde_json",
  "which",
+]
+
+[[package]]
+name = "mkdv"
+version = "0.1.15"
+dependencies = [
+ "clap",
+ "eframe",
+ "egui",
+ "egui_commonmark_extended",
+ "env_logger",
+ "image",
+ "log",
+ "mimalloc",
+ "notify",
+ "notify-debouncer-mini",
+ "regex",
+ "rfd",
+ "serde",
 ]
 
 [[package]]

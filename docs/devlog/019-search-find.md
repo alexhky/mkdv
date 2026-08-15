@@ -113,7 +113,7 @@ synthesizes `egui::Event::Key { key, pressed, modifiers }` via the bridge's
 the bridge must also OR the modifiers into `raw_input.modifiers` because egui
 derives `Input.modifiers` from `RawInput.modifiers`, not from the per-event
 modifiers field. Without that, `i.key_pressed(F)` fires but `i.modifiers.ctrl`
-stays false. This unblocks E2E testing for every egui app, not just md-viewer.
+stays false. This unblocks E2E testing for every egui app, not just mkdv.
 
 ### Search matches must skip non-renderable markdown spans
 
@@ -211,7 +211,7 @@ const HL_ACTIVE_DARK:  Color32 = Color32::from_rgb(156, 107, 26);
 ## Testing Notes
 
 **Automated**
-- `cargo test --bin md-viewer --no-default-features` — 13/13 tests pass (~5 ms total)
+- `cargo test --bin mkdv --no-default-features` — 13/13 tests pass (~5 ms total)
   - empty query / empty content
   - case-insensitive ASCII
   - multiple matches per line

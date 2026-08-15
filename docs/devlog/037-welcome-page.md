@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Branch:** `feature/welcome-page`
 **Date:** 2026-06-08
-**Issue:** aydiler/md-viewer#28
+**Issue:** aydiler/mkdv#28
 
 ## Summary
 
@@ -58,11 +58,11 @@ forcing a sample tab and refusing to close the last tab. Part 2 of issue #28
 ## Testing Notes
 
 - `cargo test` — 29 passed (added `push_recent_*` and `relative_time_buckets`).
-- `cargo build`, `cargo fmt --check`, `cargo clippy --bin md-viewer` — clean (only
+- `cargo build`, `cargo fmt --check`, `cargo clippy --bin mkdv` — clean (only
   pre-existing vendored warnings).
 - Live (Xvfb `:99`): launched with README → closed the last tab (Ctrl+W) → welcome
   page rendered with centered buttons, the "No file open" tab hint, and a Recent
-  entry (`README.md  /home/adiler/md-viewer · 1m ago`); clicking the recent entry
+  entry (`README.md  /home/adiler/mkdv · 1m ago`); clicking the recent entry
   reopened the file (window title returned to "README.md - Markdown Viewer").
 - The Open File / Open Folder buttons invoke the same `rfd` dialogs as Part 1;
   the native picker can't be driven on `:99` (portal renders on the host

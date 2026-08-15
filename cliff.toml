@@ -5,7 +5,7 @@
 header = """
 # Changelog
 
-All notable changes to markdown-viewer will be documented in this file.
+All notable changes to mkdv will be documented in this file.
 
 """
 body = """

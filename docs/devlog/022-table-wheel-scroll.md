@@ -52,7 +52,7 @@ E2E recipe (mirrors the original bug-confirmation flow):
 ```bash
 # Xvfb already up
 setsid env DISPLAY=:99 WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= \
-  ./target/debug/md-viewer /tmp/wide-table-test.md </dev/null >/dev/null 2>&1 &
+  ./target/debug/mkdv /tmp/wide-table-test.md </dev/null >/dev/null 2>&1 &
 sleep 4
 WID=$(DISPLAY=:99 xdotool search --name "wide-table" | head -1)
 DISPLAY=:99 xdotool windowsize $WID 1280 800
@@ -74,7 +74,7 @@ for i in $(seq 1 80); do DISPLAY=:99 xdotool click 5; done
 # /tmp/postfix-8: page reached bottom (table at right edge, excess wheel passed through).
 ```
 
-All three scenarios pass on debug build. `cargo clippy --bin md-viewer -- -D warnings` clean. All 13 existing unit tests still pass.
+All three scenarios pass on debug build. `cargo clippy --bin mkdv -- -D warnings` clean. All 13 existing unit tests still pass.
 
 ## Future Improvements
 

@@ -1,5 +1,12 @@
 # Zoom Feature Implementation Plan
 
+> **Status: historical implementation plan.** Document zoom shipped with a
+> 50%-300% range and persistence, and the application has grown substantially
+> since the state snapshot below. The lightbox now has a separate 10%-1000%
+> zoom path. See `README.md`, `docs/KEYBOARD_SHORTCUTS.md`, and `src/main.rs` for
+> current behavior; the analysis and alternatives below are retained as design
+> history.
+
 ## Overview
 
 Add the ability to zoom in/out (scale text larger/smaller) using **Ctrl + Mouse Wheel**.
