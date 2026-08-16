@@ -40,6 +40,10 @@ pub struct CommonMarkOptions<'f> {
     pub max_image_width: Option<usize>,
     pub show_alt_text_on_hover: bool,
     pub default_width: Option<usize>,
+    /// Scale factor used by a viewer that wants browser-like content zoom.
+    /// This affects layout widths; widget font sizes are scaled by the caller's
+    /// scoped egui style.
+    pub content_scale: f32,
     #[cfg(feature = "better_syntax_highlighting")]
     pub theme_light: String,
     #[cfg(feature = "better_syntax_highlighting")]
@@ -66,6 +70,7 @@ impl std::fmt::Debug for CommonMarkOptions<'_> {
             .field("max_image_width", &self.max_image_width)
             .field("show_alt_text_on_hover", &self.show_alt_text_on_hover)
             .field("default_width", &self.default_width);
+        s.field("content_scale", &self.content_scale);
 
         #[cfg(feature = "better_syntax_highlighting")]
         s.field("theme_light", &self.theme_light)
@@ -91,6 +96,7 @@ impl Default for CommonMarkOptions<'_> {
             max_image_width: None,
             show_alt_text_on_hover: true,
             default_width: None,
+            content_scale: 1.0,
             #[cfg(feature = "better_syntax_highlighting")]
             theme_light: DEFAULT_THEME_LIGHT.to_owned(),
             #[cfg(feature = "better_syntax_highlighting")]
@@ -118,12 +124,12 @@ impl CommonMarkOptions<'_> {
     }
 
     pub fn max_width(&self, ui: &Ui) -> f32 {
-        let available_width = ui.available_width();
+        let available_width = ui.available_width() * self.content_scale;
 
         // Use default_width as the preferred width, but never exceed available_width
         // This ensures text wraps properly when the window is narrower than default_width
         if let Some(default_width) = self.default_width {
-            (default_width as f32).min(available_width)
+            (default_width as f32 * self.content_scale).min(available_width)
         } else {
             available_width
         }
@@ -171,7 +177,7 @@ impl Style {
         typography: Option<&TypographyConfig>,
     ) -> RichText {
         // Public low-level helper remains safe by default for library users
-        // who did not register md-viewer's named strong font family.
+        // who did not register mkdv's named strong font family.
         self.to_richtext_internal(ui, text, typography, false)
     }
 
@@ -245,7 +251,7 @@ impl Style {
         }
 
         if self.strong {
-            // Always keep egui's strong styling hint. Only md-viewer opts into
+            // Always keep egui's strong styling hint. Only mkdv opts into
             // the named bold font after registering it; inline code keeps the
             // monospace family applied later by `RichText::code()`.
             rich_text = rich_text.strong();
@@ -304,7 +310,7 @@ mod tests {
 
     #[test]
     fn default_strong_style_does_not_select_markdown_strong_family() {
-        // Generic egui_commonmark consumers have not registered the md-viewer
+        // Generic egui_commonmark consumers have not registered the mkdv
         // named family, so the backend default must stay on egui's built-in
         // strong styling instead of emitting an unregistered font family.
         egui::__run_test_ui(|ui| {
@@ -325,14 +331,14 @@ mod tests {
             assert_ne!(
                 strong_format.font_id.family,
                 egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
-                "default strong markdown must not emit the md-viewer-only font family"
+                "default strong markdown must not emit the mkdv-only font family"
             );
         });
     }
 
     #[test]
     fn opt_in_strong_style_selects_distinct_markdown_strong_font() {
-        // Issue #39: md-viewer opts into a registered bold face so markdown
+        // Issue #39: mkdv opts into a registered bold face so markdown
         // strong/bold produces an inspectable font formatting change.
         egui::__run_test_ui(|ui| {
             let mut options = CommonMarkOptions::default();
@@ -355,14 +361,14 @@ mod tests {
             assert_eq!(
                 strong_format.font_id.family,
                 egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
-                "opt-in strong markdown should use the registered md-viewer strong family"
+                "opt-in strong markdown should use the registered mkdv strong family"
             );
         });
     }
 
     #[test]
     fn strong_code_keeps_monospace_font_family() {
-        // Even with md-viewer's strong-font opt-in, strong inline code should
+        // Even with mkdv's strong-font opt-in, strong inline code should
         // keep the same monospace/code font family as normal inline code.
         egui::__run_test_ui(|ui| {
             let mut options = CommonMarkOptions::default();
@@ -391,6 +397,24 @@ mod tests {
                 "strong inline code should preserve code font family; code={code_format:?}, strong_code={strong_code_format:?}"
             );
         });
+    }
+
+    #[cfg(feature = "mermaid")]
+    #[test]
+    fn scaled_media_size_follows_content_zoom() {
+        assert_eq!(
+            scaled_media_size(egui::vec2(320.0, 180.0), 1.5, 1_000.0),
+            egui::vec2(480.0, 270.0)
+        );
+    }
+
+    #[cfg(feature = "mermaid")]
+    #[test]
+    fn scaled_media_size_caps_width_without_changing_aspect_ratio() {
+        assert_eq!(
+            scaled_media_size(egui::vec2(800.0, 400.0), 2.0, 1_000.0),
+            egui::vec2(1_000.0, 500.0)
+        );
     }
 }
 
@@ -432,7 +456,10 @@ impl Link {
 
         let is_hook = cache.link_hooks().contains_key(&destination);
 
-        if response.clicked() || response.middle_clicked() {
+        // Middle button is reserved by the host viewer for panning. A link
+        // activates only on the primary click, matching the viewer's normal
+        // navigation behavior while allowing a middle drag to start anywhere.
+        if response.clicked() {
             if is_hook {
                 cache.link_hooks_mut().insert(destination.clone(), true);
             } else {
@@ -478,7 +505,7 @@ impl Image {
     pub fn end(self, ui: &mut Ui, cache: &mut CommonMarkCache, options: &CommonMarkOptions) {
         let response = ui.add(
             egui::Image::from_uri(&self.uri)
-                .fit_to_original_size(1.0)
+                .fit_to_original_size(options.content_scale)
                 .max_width(options.max_width(ui))
                 .sense(egui::Sense::click()),
         );
@@ -607,24 +634,27 @@ struct MermaidRendered {
 }
 
 #[cfg(feature = "mermaid")]
+/// Scale a rendered diagram once in logical points, then apply the same
+/// content-width cap used by Markdown layout. Keeping this calculation
+/// explicit avoids `Image`'s available-size fitting from introducing a second
+/// scale that makes diagrams drift away from the surrounding text when zoom
+/// changes.
+fn scaled_media_size(base_size: egui::Vec2, content_scale: f32, max_width: f32) -> egui::Vec2 {
+    let scale = content_scale.max(f32::EPSILON);
+    let desired = base_size * scale;
+    if max_width.is_finite() && max_width > 0.0 && desired.x > max_width {
+        desired * (max_width / desired.x)
+    } else {
+        desired
+    }
+}
+
+#[cfg(feature = "mermaid")]
 static MERMAID_FONTDB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut db = resvg::usvg::fontdb::Database::new();
     db.load_system_fonts();
     Arc::new(db)
 });
-
-#[cfg(feature = "mermaid")]
-fn fix_double_escaped_xml_entities(svg: &str) -> String {
-    // merman's escape_xml_text double-escapes text that mermaid has already
-    // entity-escaped for HTML foreignObject content.
-    // e.g. "a > b" → mermaid "a &gt; b" → escape_xml_text "a &amp;gt; b"
-    // Fix: revert the second escaping so resvg renders the intended character.
-    svg.replace("&amp;lt;", "&lt;")
-        .replace("&amp;gt;", "&gt;")
-        .replace("&amp;amp;", "&amp;")
-        .replace("&amp;quot;", "&quot;")
-        .replace("&amp;apos;", "&apos;")
-}
 
 #[cfg(feature = "mermaid")]
 fn rasterize_mermaid_svg(svg_bytes: &[u8]) -> Option<(egui::ColorImage, egui::Vec2)> {
@@ -738,7 +768,10 @@ impl CodeBlock {
                 // Placeholder with loading text
                 let w = max_width.min(options.max_width(ui));
                 let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(w, 200.0), egui::Sense::hover());
+                    ui.allocate_exact_size(
+                        egui::vec2(w, 200.0 * options.content_scale),
+                        egui::Sense::hover(),
+                    );
                 if ui.is_rect_visible(rect) {
                     ui.painter()
                         .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
@@ -746,7 +779,7 @@ impl CodeBlock {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Rendering diagram\u{2026}",
-                        egui::FontId::proportional(14.0),
+                        egui::FontId::proportional(14.0 * options.content_scale),
                         ui.visuals().text_color().gamma_multiply(0.5),
                     );
                 }
@@ -755,10 +788,11 @@ impl CodeBlock {
             }
             Some(MermaidState::Ready { texture, size }) => {
                 let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
+                let max_width = options.max_width(ui).min(max_width);
+                let display_size = scaled_media_size(*size, options.content_scale, max_width);
                 let response = ui.add(
                     egui::Image::new(egui::ImageSource::Texture(sized_texture))
-                        .fit_to_original_size(1.0)
-                        .max_width(options.max_width(ui).min(max_width))
+                        .fit_to_exact_size(display_size)
                         .sense(egui::Sense::click()),
                 );
                 if response.hovered() {
@@ -792,10 +826,8 @@ impl CodeBlock {
         std::thread::spawn(move || {
             let result = match renderer.render_svg_readable_sync(&content) {
                 Ok(Some(svg_string)) => {
-                    let svg_string = fix_double_escaped_xml_entities(&svg_string);
                     let svg_string = CodeBlock::sanitize_svg_font_family(&svg_string);
                     let svg_string = CodeBlock::strip_stroke_text(&svg_string);
-                    let svg_string = CodeBlock::wrap_fallback_text(&svg_string);
                     let svg_bytes = svg_string.into_bytes();
 
                     match rasterize_mermaid_svg(&svg_bytes) {
@@ -818,11 +850,16 @@ impl CodeBlock {
     /// font-family on the root `<svg>` element for text that lacks one
     /// (e.g. sequence diagram labels).
     fn sanitize_svg_font_family(svg: &str) -> String {
-        // DejaVu Sans first — it has the widest Unicode coverage (including →, ←, etc.)
-        // which prevents resvg from falling back to a monospace/bold font for missing glyphs.
-        let safe_attr = "DejaVu Sans, Noto Sans, Liberation Sans";
+        // Ordered by metric compatibility with the font merman laid the diagram out
+        // with, which is what keeps labels inside the shapes sized for them. merman
+        // measures against vendored Trebuchet MS tables; Liberation Sans, Arial and
+        // Helvetica land within ~3% of those on real label text, so they go first.
+        // DejaVu Sans and Noto Sans are wider and would push text past the node
+        // border, but they stay in the list as coverage/availability fallbacks.
+        let safe_attr = "Trebuchet MS, Liberation Sans, Arial, Helvetica, DejaVu Sans, Noto Sans";
         // Use single quotes — double quotes would break style="..." XML attributes
-        let safe_css = "'DejaVu Sans', 'Noto Sans', 'Liberation Sans', sans-serif";
+        let safe_css = "'Trebuchet MS', 'Liberation Sans', Arial, Helvetica, \
+                        'DejaVu Sans', 'Noto Sans', sans-serif";
 
         let mut result = String::with_capacity(svg.len());
         let mut remaining = svg;
@@ -855,14 +892,16 @@ impl CodeBlock {
                 // CSS property: font-family: ...; or font-family:...;
                 result.push_str("font-family: ");
                 result.push_str(safe_css);
-                // Skip colon, optional whitespace, and value until ; or }
+                // Skip colon, optional whitespace, and value until ; or }.
+                // merman quotes font names as `&quot;`, so a plain search for `;`
+                // would stop inside that entity and leave the rest of the old
+                // value in the output — skip over entity references instead.
                 let after_colon = &after[1..];
                 let trimmed = after_colon.trim_start();
-                if let Some(end) = trimmed.find(|c: char| c == ';' || c == '}') {
-                    remaining = &trimmed[end..];
-                } else {
-                    remaining = "";
-                }
+                remaining = match Self::find_css_value_end(trimmed) {
+                    Some(end) => &trimmed[end..],
+                    None => "",
+                };
             } else {
                 // Not a font-family declaration we recognize
                 result.push_str("font-family");
@@ -881,6 +920,28 @@ impl CodeBlock {
         }
 
         result
+    }
+
+    /// Find the byte offset that terminates a CSS declaration value (`;` or
+    /// `}`), skipping over XML entity references such as `&quot;` whose own
+    /// trailing `;` must not be mistaken for the terminator.
+    fn find_css_value_end(value: &str) -> Option<usize> {
+        let bytes = value.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b';' | b'}' => return Some(i),
+                b'&' => {
+                    // Skip the entity, including its terminating `;`.
+                    match value[i + 1..].find(';') {
+                        Some(rel) => i += rel + 2,
+                        None => i += 1,
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        None
     }
 
     /// Remove stroke-outline `<text>` elements from fallback groups.
@@ -917,178 +978,6 @@ impl CodeBlock {
         }
         result.push_str(remaining);
         result
-    }
-
-    /// Word-wrap long fallback text in merman's readable SVG output.
-    /// merman places all node label text on a single line in the fallback `<text>` elements,
-    /// but the node rects are sized for wrapped text. This causes overflow when text is long.
-    /// We split long labels into multiple `<tspan>` lines to fit within nodes.
-    fn wrap_fallback_text(svg: &str) -> String {
-        const FALLBACK_MARKER: &str = "data-merman-foreignobject=\"fallback\"";
-        if !svg.contains(FALLBACK_MARKER) {
-            return svg.to_owned();
-        }
-
-        // Average char width at 16px for Noto Sans ≈ 8.5px; node rects cap at ~260px
-        // Use ~28 chars as the wrap threshold
-        const MAX_CHARS: usize = 28;
-
-        let mut result = String::with_capacity(svg.len() + 512);
-        let mut remaining = svg;
-
-        while let Some(marker_pos) = remaining.find(FALLBACK_MARKER) {
-            // Find the <g that starts this fallback group
-            let g_start = remaining[..marker_pos].rfind('<').unwrap_or(marker_pos);
-            // Copy everything before this group
-            result.push_str(&remaining[..g_start]);
-
-            // Find </g> end
-            let after_marker = &remaining[marker_pos..];
-            if let Some(g_end_rel) = after_marker.find("</g>") {
-                let g_end = marker_pos + g_end_rel + 4;
-                let group = &remaining[g_start..g_end];
-
-                // Process: find <tspan ...>TEXT</tspan> patterns and wrap long ones
-                let processed = Self::wrap_tspans_in_group(group, MAX_CHARS);
-                result.push_str(&processed);
-
-                remaining = &remaining[g_end..];
-            } else {
-                result.push_str(&remaining[g_start..]);
-                remaining = "";
-            }
-        }
-        result.push_str(remaining);
-        result
-    }
-
-    /// Process a single fallback `<g>` group: wrap long tspan text, then
-    /// recalculate all dy values so visual lines are evenly spaced and centered.
-    ///
-    /// Each visual line is emitted as its own `<text>` element with a single
-    /// `<tspan dy="...">` so that dy is always relative to the text element's
-    /// base y (not to a previous tspan).
-    fn wrap_tspans_in_group(group: &str, max_chars: usize) -> String {
-        const LINE_SPACING: f32 = 16.0; // matches font-size 16px
-
-        // --- Pass 1: collect <text> elements and wrap their tspan content ---
-
-        // We need: the open tag template (for style/attrs), x value, and visual lines.
-        let mut open_tag_template = String::new();
-        let mut x_val = String::new();
-        let mut all_visual_lines: Vec<String> = Vec::new();
-
-        let mut remaining = group;
-
-        // Prefix: everything before the first <text
-        let prefix = if let Some(pos) = remaining.find("<text") {
-            let p = remaining[..pos].to_string();
-            remaining = &remaining[pos..];
-            p
-        } else {
-            return group.to_owned();
-        };
-
-        while let Some(text_start) = remaining.find("<text") {
-            let text_rest = &remaining[text_start..];
-            let Some(open_end) = text_rest.find('>') else { break };
-
-            // Capture the first <text ...> tag as template (all share same attrs)
-            if open_tag_template.is_empty() {
-                open_tag_template = text_rest[..=open_end].to_string();
-            }
-
-            let inner = &text_rest[open_end + 1..];
-            let Some(close_pos) = inner.find("</text>") else { break };
-            let inner_content = &inner[..close_pos];
-
-            // Extract tspan content
-            let mut tspan_remaining = inner_content;
-            while let Some(ts) = tspan_remaining.find("<tspan") {
-                let ts_rest = &tspan_remaining[ts..];
-                let Some(ts_close) = ts_rest.find("</tspan>") else { break };
-                let full_tspan = &ts_rest[..ts_close + 8];
-
-                if x_val.is_empty() {
-                    x_val = Self::extract_attr(full_tspan, "x").to_string();
-                }
-
-                let content_start = full_tspan.find('>').map(|p| p + 1).unwrap_or(0);
-                let content = &full_tspan[content_start..ts_close];
-
-                if content.trim().len() > max_chars {
-                    all_visual_lines.extend(Self::word_wrap(content.trim(), max_chars));
-                } else {
-                    all_visual_lines.push(content.to_string());
-                }
-
-                tspan_remaining = &ts_rest[ts_close + 8..];
-            }
-
-            // Advance past </text>
-            remaining = &remaining[text_start + open_end + 1 + close_pos + 7..];
-        }
-
-        let suffix = remaining;
-
-        if all_visual_lines.is_empty() {
-            return group.to_owned();
-        }
-
-        // --- Pass 2: emit one <text> per visual line with centered dy ---
-        let total = all_visual_lines.len();
-        let mut result = String::with_capacity(group.len() + 512);
-        result.push_str(&prefix);
-
-        for (i, line) in all_visual_lines.iter().enumerate() {
-            let dy = if total <= 1 {
-                0.0
-            } else {
-                -(total as f32 - 1.0) * LINE_SPACING * 0.5 + i as f32 * LINE_SPACING
-            };
-            result.push_str(&open_tag_template);
-            result.push_str(&format!(
-                "<tspan x=\"{}\" dy=\"{}\">{}</tspan></text>",
-                x_val, dy, line
-            ));
-        }
-
-        result.push_str(suffix);
-        result
-    }
-
-    /// Extract an XML attribute value by name.
-    fn extract_attr<'a>(tag: &'a str, name: &str) -> &'a str {
-        let needle = format!("{}=\"", name);
-        if let Some(start) = tag.find(&needle) {
-            let val = &tag[start + needle.len()..];
-            if let Some(end) = val.find('"') {
-                return &val[..end];
-            }
-        }
-        ""
-    }
-
-    /// Word-wrap text at word boundaries, keeping lines under max_chars.
-    fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
-        let mut lines = Vec::new();
-        let mut current_line = String::new();
-
-        for word in text.split_whitespace() {
-            if current_line.is_empty() {
-                current_line = word.to_string();
-            } else if current_line.len() + 1 + word.len() <= max_chars {
-                current_line.push(' ');
-                current_line.push_str(word);
-            } else {
-                lines.push(std::mem::take(&mut current_line));
-                current_line = word.to_string();
-            }
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-        lines
     }
 }
 
@@ -1405,6 +1294,18 @@ pub fn render_math(
     latex: &str,
     is_inline: bool,
 ) {
+    render_math_scaled(ui, cache, latex, is_inline, 1.0);
+}
+
+/// Render math with a caller-provided viewer content scale.
+#[cfg(feature = "math")]
+pub fn render_math_scaled(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    latex: &str,
+    is_inline: bool,
+    content_scale: f32,
+) {
     let is_dark = ui.style().visuals.dark_mode;
     let bg = ui.visuals().panel_fill;
     let fg = ui.visuals().text_color();
@@ -1471,9 +1372,14 @@ pub fn render_math(
                 ui.spinner();
             } else {
                 // Display: placeholder box
-                let w = ui.available_width().min(400.0);
+                let w = ui
+                    .available_width()
+                    .min(400.0 * content_scale);
                 let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+                    ui.allocate_exact_size(
+                        egui::vec2(w, 40.0 * content_scale),
+                        egui::Sense::hover(),
+                    );
                 if ui.is_rect_visible(rect) {
                     ui.painter()
                         .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
@@ -1481,7 +1387,7 @@ pub fn render_math(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Rendering formula\u{2026}",
-                        egui::FontId::proportional(12.0),
+                        egui::FontId::proportional(12.0 * content_scale),
                         ui.visuals().text_color().gamma_multiply(0.5),
                     );
                 }
@@ -1494,6 +1400,7 @@ pub fn render_math(
             size,
             baseline_ratio,
         }) => {
+            let display_size = *size * content_scale;
             let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
             if is_inline {
                 // Align the formula's own baseline to the text baseline. Inline
@@ -1535,17 +1442,23 @@ pub fn render_math(
                     .and_then(|r| r.row.glyphs.first())
                     .map_or(font_size * 0.8, |g| g.font_ascent);
                 let text_descent = line_height - font_ascent;
-                let image_descent = (1.0 - *baseline_ratio) * size.y;
+                let image_descent = (1.0 - *baseline_ratio) * display_size.y;
                 let lift = (text_descent - image_descent).max(0.0);
                 let (rect, _) = ui
-                    .allocate_exact_size(egui::vec2(size.x, size.y + lift), egui::Sense::hover());
-                img.paint_at(ui, egui::Rect::from_min_size(rect.min, *size));
+                    .allocate_exact_size(
+                        egui::vec2(display_size.x, display_size.y + lift),
+                        egui::Sense::hover(),
+                    );
+                img.paint_at(
+                    ui,
+                    egui::Rect::from_min_size(rect.min, display_size),
+                );
             } else {
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
                     ui.add(
                         egui::Image::new(egui::ImageSource::Texture(sized_texture))
-                            .fit_to_original_size(1.0)
+                            .fit_to_original_size(content_scale)
                             .max_width(ui.available_width()),
                     );
                 });
@@ -1851,15 +1764,14 @@ impl Default for CommonMarkCache {
             mermaid_tx,
             #[cfg(feature = "mermaid")]
             mermaid_rx,
+            // Deliberately no `with_text_measurer` override: `HeadlessRenderer::new()`
+            // already defaults to `VendoredFontMetricsTextMeasurer`, which measures per
+            // glyph from vendored font tables. A `DeterministicTextMeasurer` charges
+            // every glyph the same width, so its factor has to cover the widest one —
+            // at the 0.65 we used to pass it, labels measured ~33% wider than they
+            // render. See `sanitize_svg_font_family` for the matching font stack.
             #[cfg(feature = "mermaid")]
-            mermaid_renderer: merman::render::HeadlessRenderer::new()
-                .with_text_measurer(Arc::new(merman::render::DeterministicTextMeasurer {
-                    // Wider than default (0.55) to accommodate Noto Sans/DejaVu Sans
-                    // which are wider than the vendored Trebuchet MS metrics.
-                    // 0.65 prevents text overlap in complex flowcharts with long labels.
-                    char_width_factor: 0.65,
-                    line_height_factor: 0.0, // use internal default
-                })),
+            mermaid_renderer: merman::render::HeadlessRenderer::new(),
             #[cfg(feature = "mermaid")]
             clicked_mermaid: None,
             clicked_image: None,
@@ -2152,4 +2064,48 @@ pub fn prepare_show(cache: &mut CommonMarkCache, ctx: &egui::Context) {
     }
 
     cache.deactivate_link_hooks();
+}
+
+#[cfg(all(test, feature = "mermaid"))]
+mod mermaid_tests {
+    use super::CodeBlock;
+
+    /// merman 0.7 quotes font names as `&quot;`. The entity's own `;` must not
+    /// be mistaken for the end of the CSS declaration.
+    #[test]
+    fn sanitizes_font_family_with_quoted_entities() {
+        let svg = concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text style="text-anchor: middle; "#,
+            r#"font-size: 16px; font-family: &quot;trebuchet ms&quot;,verdana,arial,sans-serif;">Hi</text></svg>"#
+        );
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        // The replacement stack names Trebuchet MS itself, so assert on the parts of
+        // the original declaration that cannot appear in it.
+        assert!(!out.contains("verdana"), "old font value survived: {out}");
+        assert!(!out.contains("&quot;"), "old font value survived: {out}");
+        assert!(out.contains("'Liberation Sans'"));
+        assert!(out.contains("'DejaVu Sans'"));
+        assert!(out.contains(">Hi</text>"), "markup was corrupted: {out}");
+    }
+
+    #[test]
+    fn sanitizes_font_family_attribute_form() {
+        let svg =
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text font-family="Courier New">Hi</text></svg>"#;
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        assert!(!out.contains("Courier New"));
+        assert!(out.contains("Liberation Sans"));
+        assert!(out.contains("DejaVu Sans"));
+        assert!(out.contains(">Hi</text>"));
+    }
+
+    /// merman 0.7 emits singly-escaped entities, so the text must pass through
+    /// untouched now that the double-unescape workaround is gone.
+    #[test]
+    fn preserves_single_escaped_entities() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><text>A &amp; B &lt; C</text></svg>"#;
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        let out = CodeBlock::strip_stroke_text(&out);
+        assert!(out.contains("A &amp; B &lt; C"), "entities changed: {out}");
+    }
 }

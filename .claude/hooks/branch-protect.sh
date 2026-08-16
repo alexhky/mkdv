@@ -22,7 +22,7 @@ fi
 
 if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
     cat << 'DENY'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Cannot edit files on 'main' branch. Create a feature worktree first:\n\ngit -C ~/markdown-viewer/.bare worktree add ~/markdown-viewer/worktrees/<name> -b feature/<name>"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Cannot edit files on 'main' branch. Create a feature worktree first:\n\ngit -C ~/mkdv/.bare worktree add ~/mkdv/worktrees/<name> -b feature/<name>"}}
 DENY
 fi
 

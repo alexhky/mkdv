@@ -23,7 +23,7 @@ Removed custom vertical-wheel forwarding. Wide tables still use `ScrollArea::hor
 - `cargo fmt --check` exit 0.
 - `cargo check` exit 0 with existing warnings.
 - `cargo clippy --all-targets --all-features` exit 0 with existing warnings.
-- Manual: `cargo run -- /tmp/md-viewer-wide-table.md --no-watch` launched.
+- Manual: `cargo run -- /tmp/mkdv-wide-table.md --no-watch` launched.
 - Manual: confirmed by user on real display with `docs/DEVELOPMENT_PLAN.md`. Reported "fixed."
 
 ## Impact

@@ -7,13 +7,13 @@
 
 ## Summary
 
-Issue #39 reported that `**bold**` markdown rendered with no visible bold weight. The fix keeps generic `egui_commonmark` behavior safe by default, then lets md-viewer opt into a registered `MarkdownStrong` font family backed by a real bold font face when available.
+Issue #39 reported that `**bold**` markdown rendered with no visible bold weight. The fix keeps generic `egui_commonmark` behavior safe by default, then lets mkdv opt into a registered `MarkdownStrong` font family backed by a real bold font face when available.
 
 ## Features
 
 - [x] Added opt-in `CommonMarkViewer::use_strong_font_family(true)` for strong markdown spans.
 - [x] Exported `STRONG_FONT_FAMILY` so callers can register the named family before enabling the option.
-- [x] Registered md-viewer's `MarkdownStrong` family during font setup, preferring Noto Sans Bold and falling back to existing proportional fonts.
+- [x] Registered mkdv's `MarkdownStrong` family during font setup, preferring Noto Sans Bold and falling back to existing proportional fonts.
 - [x] Preserved inline-code font family for `**\`code\`**` spans.
 - [x] Added backend unit coverage for safe default behavior, opt-in strong font selection, and strong inline code.
 
@@ -21,7 +21,7 @@ Issue #39 reported that `**bold**` markdown rendered with no visible bold weight
 
 ### `RichText::strong()` is not enough for visible bold everywhere
 
-`Style::to_richtext` already called `RichText::strong()` for `Tag::Strong`, but md-viewer's rendered output could still look unchanged when egui used the same regular font face. Selecting a distinct named font family makes markdown strong spans produce a visible formatting difference in md-viewer.
+`Style::to_richtext` already called `RichText::strong()` for `Tag::Strong`, but mkdv's rendered output could still look unchanged when egui used the same regular font face. Selecting a distinct named font family makes markdown strong spans produce a visible formatting difference in mkdv.
 
 ```rust
 if self.strong {
@@ -37,7 +37,7 @@ if self.strong {
 
 ### Strong-font override must be opt-in for library safety
 
-A first-pass renderer-only fix would have made every `egui_commonmark` consumer emit the md-viewer-specific named font family. That can panic or render poorly for consumers that never registered the family. `CommonMarkOptions::use_strong_font_family` defaults to `false`; md-viewer enables it only after `setup_fonts` registers `MarkdownStrong`.
+A first-pass renderer-only fix would have made every `egui_commonmark` consumer emit the mkdv-specific named font family. That can panic or render poorly for consumers that never registered the family. `CommonMarkOptions::use_strong_font_family` defaults to `false`; mkdv enables it only after `setup_fonts` registers `MarkdownStrong`.
 
 ```rust
 CommonMarkViewer::new()
@@ -66,13 +66,13 @@ Inline code calls `RichText::code()` later in the style path. The strong-family 
 
 ## Testing Notes
 
-Validation run on 2026-07-04 in `/home/akiro/Coding/md-viewer-fix-39-bold-rendering`:
+Validation run on 2026-07-04 in `/home/akiro/Coding/mkdv-fix-39-bold-rendering`:
 
 ```bash
 cargo test -p egui_commonmark_backend_extended strong --lib
 # 3 passed; 0 failed
 
-cargo test -p md-viewer
+cargo test -p mkdv
 # 29 passed; 0 failed
 
 cargo clippy --all-targets --all-features
@@ -84,9 +84,9 @@ git diff --check
 # no output
 ```
 
-Independent verification passed on 2026-07-04 via `verification` agent. Local spot-checks reran backend strong tests, md-viewer unit tests, and `git diff --check` with matching pass results.
+Independent verification passed on 2026-07-04 via `verification` agent. Local spot-checks reran backend strong tests, mkdv unit tests, and `git diff --check` with matching pass results.
 
 ## Future Improvements
 
 - [ ] Add platform-specific strong-font candidates for Windows/macOS while addressing issue #40.
-- [ ] Consider a visual/snapshot-style rendering test if md-viewer gains stable UI snapshot infrastructure.
+- [ ] Consider a visual/snapshot-style rendering test if mkdv gains stable UI snapshot infrastructure.

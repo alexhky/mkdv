@@ -18,10 +18,20 @@ use notify_debouncer_mini::{new_debouncer, new_debouncer_opt, DebouncedEventKind
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+mod pinch;
+
 #[cfg(feature = "mcp")]
 use egui_mcp_bridge::{McpBridge, McpUiExt};
 
-const APP_KEY: &str = "md-viewer-state";
+const APP_KEY: &str = "mkdv-state";
+const DESKTOP_ENTRY_TEMPLATE: &str = include_str!("../data/mkdv.desktop");
+
+/// Scalable launcher icon, installed under `hicolor` so `Icon=mkdv` resolves.
+const APP_ICON_SVG: &str = include_str!("../data/mkdv.svg");
+
+/// Rasterized icon for the window/taskbar, which needs pixels rather than SVG.
+/// Rendered from `data/mkdv.svg`; regenerate both together.
+const APP_ICON_PNG: &[u8] = include_bytes!("../data/mkdv-256.png");
 
 // Welcome page recent-files: how many to keep, and how many to show before "Show more".
 const RECENT_FILES_CAP: usize = 20;
@@ -134,6 +144,77 @@ const SYSTEM_FONT_PATHS: &[(&str, &str)] = &[
 ];
 const MAX_WATCHER_RETRIES: u32 = 3;
 const FLASH_DURATION_MS: u64 = 600;
+const MIN_SCALING: f32 = 0.5;
+const MAX_SCALING: f32 = 3.0;
+// Keep zoomed-out text readable while still leaving room to see more of a
+// document. This is deliberately higher than the app-wide scaling minimum:
+// viewer zoom is a reading aid, not a way to make the entire UI tiny.
+const MIN_VIEWER_ZOOM: f32 = 0.75;
+const MAX_VIEWER_ZOOM: f32 = 3.0;
+const NATIVE_LINE_SCROLL_SPEED: f32 = 40.0;
+const SCROLL_ZOOM_SPEED: f32 = 1.0 / 200.0;
+/// Extra wheel/touchpad travel applied by the viewer's manual scroll pass on
+/// top of what the ScrollArea already consumed. Raw compositor deltas are
+/// small on a touchpad, so this is what sets the viewer's scrolling pace.
+/// Override at runtime with `MKDV_SCROLL_SPEED` for tuning.
+const VIEWER_SCROLL_SPEED: f32 = 2.0;
+
+/// Ratio between adjacent viewer zoom levels.
+///
+/// Zoom snaps to a geometric ladder rather than tracking a gesture
+/// continuously. Every distinct zoom value forces the Markdown renderer to
+/// re-wrap the document *and* egui to rasterize a fresh set of glyphs at the
+/// new font sizes, which is the expensive part; a browser sidesteps it by
+/// scaling an already-rasterized layer. Snapping keeps the number of distinct
+/// levels small (~65 across the supported range), so after the first pass the
+/// glyph atlas and layout caches are warm and a pinch replays cached levels
+/// instead of rebuilding each frame. The step is fine enough that the ladder
+/// still reads as continuous motion.
+const VIEWER_ZOOM_STEP: f32 = 1.02;
+
+/// Snap a zoom factor to the nearest level on the viewer's zoom ladder.
+fn quantize_viewer_zoom(zoom: f32) -> f32 {
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return 1.0;
+    }
+    let steps = (zoom.ln() / VIEWER_ZOOM_STEP.ln()).round();
+    VIEWER_ZOOM_STEP
+        .powf(steps)
+        .clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM)
+}
+
+/// Draw a small zoom/scaling percentage readout that resets on click.
+///
+/// It stays visually a status label — it only picks up a hover highlight and a
+/// pointing cursor — so the top bar does not gain another button-looking
+/// control for something that is usually just information.
+fn zoom_readout(ui: &mut egui::Ui, text: &str, hover: &str) -> egui::Response {
+    let response = ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .small()
+                .color(ui.visuals().weak_text_color()),
+        )
+        .sense(egui::Sense::click()),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.on_hover_text(hover)
+}
+
+/// Resolve the viewer scroll speed once, honoring the `MKDV_SCROLL_SPEED`
+/// override. Values outside a sane range fall back to the default.
+fn viewer_scroll_speed() -> f32 {
+    static SPEED: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SPEED.get_or_init(|| {
+        std::env::var("MKDV_SCROLL_SPEED")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (0.1..=10.0).contains(v))
+            .unwrap_or(VIEWER_SCROLL_SPEED)
+    })
+}
 
 // Optimal widths for initial window sizing (based on typography research)
 // Content: 600px optimal for 55-75 CPL readability
@@ -186,6 +267,89 @@ fn content_default_width(full_width_content: bool) -> Option<usize> {
     } else {
         Some(CONTENT_OPTIMAL_WIDTH as usize)
     }
+}
+
+/// Return the next fullscreen state for a title-bar toggle.
+///
+/// The viewport state can be unknown during the first frame (or on a backend
+/// that cannot report it), so an unknown state is treated as windowed.
+fn toggled_fullscreen_state(current: Option<bool>) -> bool {
+    !current.unwrap_or(false)
+}
+
+/// Convert a raw wheel event with the zoom modifier into its multiplicative
+/// zoom factor. egui performs the same conversion internally, but keeping a
+/// copy here lets the viewer handle Linux touchpads whose pinch gesture is
+/// delivered as a stream of Ctrl+wheel events.
+fn wheel_zoom_factor(unit: egui::MouseWheelUnit, delta: egui::Vec2, viewport_height: f32) -> f32 {
+    let points = match unit {
+        egui::MouseWheelUnit::Point => delta.x + delta.y,
+        egui::MouseWheelUnit::Line => (delta.x + delta.y) * NATIVE_LINE_SCROLL_SPEED,
+        egui::MouseWheelUnit::Page => (delta.x + delta.y) * viewport_height.max(1.0),
+    };
+    (SCROLL_ZOOM_SPEED * points).exp()
+}
+
+/// Keep a zoom factor usable even if a backend reports a malformed gesture.
+fn sane_zoom_factor(factor: f32) -> f32 {
+    if factor.is_finite() && factor > 0.0 {
+        factor
+    } else {
+        1.0
+    }
+}
+
+/// Return the scroll offset that keeps the content under the pointer stable
+/// while the viewer layout changes size.
+fn zoom_anchor_offset(
+    old_offset: f32,
+    old_content_size: f32,
+    new_content_size: f32,
+    pointer_offset: f32,
+    max_offset: f32,
+) -> f32 {
+    if old_content_size <= f32::EPSILON || !old_content_size.is_finite() {
+        return old_offset.clamp(0.0, max_offset.max(0.0));
+    }
+
+    let old_content_position = old_offset + pointer_offset.max(0.0);
+    let new_content_position = old_content_position / old_content_size * new_content_size;
+    (new_content_position - pointer_offset).clamp(0.0, max_offset.max(0.0))
+}
+
+/// Scale only the markdown viewer's local widget style. The surrounding menu,
+/// sidebars, and window chrome keep the app-level `scaling` unchanged.
+fn scale_viewer_style(ui: &mut egui::Ui, scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+
+    let style = ui.style_mut();
+    for font in style.text_styles.values_mut() {
+        font.size *= scale;
+    }
+
+    let spacing = &mut style.spacing;
+    spacing.item_spacing *= scale;
+    spacing.button_padding *= scale;
+    spacing.indent *= scale;
+    spacing.interact_size *= scale;
+    spacing.slider_width *= scale;
+    spacing.slider_rail_height *= scale;
+    spacing.combo_width *= scale;
+    spacing.text_edit_width *= scale;
+    spacing.icon_width *= scale;
+    spacing.icon_width_inner *= scale;
+    spacing.icon_spacing *= scale;
+    spacing.default_area_size *= scale;
+    spacing.tooltip_width *= scale;
+    spacing.menu_width *= scale;
+    spacing.menu_spacing *= scale;
+    spacing.combo_height *= scale;
+    spacing.scroll.bar_width *= scale;
+    spacing.scroll.handle_min_length *= scale;
+    spacing.scroll.bar_inner_margin *= scale;
+    spacing.scroll.bar_outer_margin *= scale;
 }
 
 /// A recently opened file, for the welcome page's "Recent" list.
@@ -241,7 +405,8 @@ fn format_relative_time(epoch_secs: u64, now: u64) -> String {
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedState {
     dark_mode: Option<bool>,
-    zoom_level: Option<f32>,
+    scaling: Option<f32>,
+    viewer_zoom: Option<f32>,
     show_outline: Option<bool>,
     full_width_content: Option<bool>,
     open_tabs: Option<Vec<PathBuf>>,
@@ -721,7 +886,9 @@ struct Tab {
     /// Set of header indices that are collapsed in the outline
     collapsed_headers: HashSet<usize>,
     scroll_offset: f32,
+    horizontal_scroll_offset: f32,
     pending_scroll_offset: Option<f32>,
+    last_content_width: f32,
     /// Composite header-position key (see `header_position_key`) waiting for
     /// a corrective scroll. Set when the outline-click handler used the
     /// line-ratio fallback because the cache didn't yet have the precise y
@@ -783,7 +950,9 @@ impl Tab {
             outline_headers: parsed.outline_headers,
             collapsed_headers: HashSet::new(),
             scroll_offset: 0.0,
+            horizontal_scroll_offset: 0.0,
             pending_scroll_offset: None,
+            last_content_width: 0.0,
             pending_header_click_key: None,
             correct_active_search_pending: false,
             last_content_height: 0.0,
@@ -852,7 +1021,9 @@ impl Tab {
             self.cache = CommonMarkCache::default();
             self.content_version = self.content_version.wrapping_add(1);
             self.scroll_offset = 0.0;
+            self.horizontal_scroll_offset = 0.0;
             self.pending_scroll_offset = None;
+            self.last_content_width = 0.0;
             self.base_uri = Self::compute_base_uri(&self.path);
 
             let parsed = parse_headers(&self.content);
@@ -1304,7 +1475,7 @@ fn setup_fonts(ctx: &egui::Context) {
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Parser, Debug)]
-#[command(name = "md-viewer")]
+#[command(name = "mkdv")]
 #[command(about = "A lightweight markdown viewer", long_about = None)]
 struct Args {
     /// Markdown file to open
@@ -1317,6 +1488,10 @@ struct Args {
     /// Keep the GUI process attached to the terminal for debugging/logs
     #[arg(long)]
     foreground: bool,
+
+    /// Register mkdv in the user's GNOME application launcher and exit
+    #[arg(long)]
+    install_desktop: bool,
 
     /// Internal marker used by the detached child process to avoid respawn loops
     #[arg(long, hide = true)]
@@ -1380,14 +1555,98 @@ fn spawn_detached_child() -> io::Result<()> {
     Ok(())
 }
 
+/// Escape an executable path for the quoted `Exec=` value in a desktop entry.
+fn desktop_exec_path(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .chars()
+        .flat_map(|character| match character {
+            '\\' | '"' | '`' | '$' => ['\\', character].into_iter().collect::<Vec<_>>(),
+            character => [character].into_iter().collect::<Vec<_>>(),
+        })
+        .collect::<String>();
+    format!("\"{escaped}\"")
+}
+
+fn desktop_entry_contents(executable: &Path) -> String {
+    DESKTOP_ENTRY_TEMPLATE.replace(
+        "Exec=mkdv %f",
+        &format!("Exec={} %f", desktop_exec_path(executable)),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+
+    let applications_dir = data_home.join("applications");
+    fs::create_dir_all(&applications_dir)?;
+
+    // The entry says `Icon=mkdv`, so the icon has to be somewhere the theme
+    // lookup searches. A failure here is not fatal: the launcher still works,
+    // it just falls back to a generic icon.
+    let icons_dir = data_home.join("icons/hicolor/scalable/apps");
+    if let Err(err) = fs::create_dir_all(&icons_dir)
+        .and_then(|()| fs::write(icons_dir.join("mkdv.svg"), APP_ICON_SVG))
+    {
+        log::warn!("Could not install the launcher icon: {err}");
+    }
+
+    let executable = std::env::current_exe()?;
+    let desktop_path = applications_dir.join("mkdv.desktop");
+    fs::write(&desktop_path, desktop_entry_contents(&executable))?;
+    Ok(Some(desktop_path))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
+    Ok(None)
+}
+
+/// Decode the embedded PNG into the RGBA buffer `eframe` wants for the window
+/// icon. Returns `None` rather than failing startup over decoration.
+fn window_icon() -> Option<egui::IconData> {
+    let image = image::load_from_memory(APP_ICON_PNG)
+        .inspect_err(|err| log::warn!("Could not decode the window icon: {err}"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Some(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
     let args = Args::parse();
 
+    if args.install_desktop {
+        match install_desktop_entry() {
+            Ok(Some(path)) => println!("Installed GNOME application entry at {}", path.display()),
+            Ok(None) => println!("Desktop launcher registration is only supported on Linux"),
+            Err(err) => {
+                eprintln!("Failed to install GNOME application entry: {err}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Err(err) = install_desktop_entry() {
+        log::warn!("Could not register GNOME application entry: {err}");
+    }
+
     if should_detach(&args, launched_from_terminal()) {
         if let Err(err) = spawn_detached_child() {
-            eprintln!("Failed to detach md-viewer process: {err}. Running in foreground.");
+            eprintln!("Failed to detach mkdv process: {err}. Running in foreground.");
         } else {
             return Ok(());
         }
@@ -1397,17 +1656,23 @@ fn main() -> eframe::Result<()> {
     let optimal_width =
         CONTENT_OPTIMAL_WIDTH + EXPLORER_DEFAULT_WIDTH + OUTLINE_DEFAULT_WIDTH + PANEL_SEPARATORS;
 
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_inner_size([optimal_width, OPTIMAL_WINDOW_HEIGHT])
             .with_min_inner_size([400.0, 300.0])
             .with_title("Markdown Viewer")
+            .with_app_id("mkdv")
             .with_drag_and_drop(true),
         ..Default::default()
     };
 
     eframe::run_native(
-        "md-viewer",
+        "mkdv",
         options,
         Box::new(move |cc| Ok(Box::new(MarkdownApp::new(cc, args.file, !args.no_watch)))),
     )
@@ -1478,7 +1743,16 @@ struct MarkdownApp {
     tabs: Vec<Tab>,
     active_tab: usize,
     dark_mode: bool,
-    zoom_level: f32,
+    /// Global egui UI scale. This affects the window chrome and all widgets.
+    scaling: f32,
+    /// Markdown viewer zoom. This is applied only inside the document area,
+    /// and always sits on the `VIEWER_ZOOM_STEP` ladder.
+    viewer_zoom: f32,
+    /// Unsnapped zoom the gestures accumulate into. A single pinch update is
+    /// far smaller than one ladder step, so the continuous value has to be
+    /// kept separately or the small deltas would round away and the gesture
+    /// would never advance.
+    viewer_zoom_target: f32,
     show_outline: bool,
     full_width_content: bool,
     watch_enabled: bool,
@@ -1514,10 +1788,27 @@ struct MarkdownApp {
     open_tab_paths: HashSet<PathBuf>,
     // Lightbox overlay for enlarged mermaid diagrams
     lightbox: Option<LightboxState>,
-    // Scroll delta captured from raw_input_hook for lightbox zoom (stripped from RawInput)
-    lightbox_scroll: f32,
+    /// Mouse-wheel notches captured for lightbox zoom (stripped from RawInput).
+    /// Line-unit only: a wheel notch zooms, a touchpad swipe does not.
+    lightbox_wheel_notches: f32,
+    /// Point-unit (touchpad) two-finger movement captured for lightbox panning.
+    lightbox_pan: egui::Vec2,
+    /// Multiplicative zoom collected from raw native gesture events. Consumed
+    /// by the lightbox while it is open, by the Markdown viewer otherwise.
+    /// This is reset at the beginning of every input pass.
+    pending_viewer_zoom: f32,
+    /// Touchpad pinch, sourced outside winit (see `pinch`).
+    pinch: pinch::PinchGestures,
     // Counter for unique lightbox IDs (prevents stale egui state between opens)
     lightbox_open_count: u64,
+    /// Viewer rect from the previous frame. `raw_input_hook` runs before any
+    /// UI code, so it needs last frame's geometry to decide whether a middle
+    /// press belongs to the viewer (pan) or to the chrome (tab close).
+    viewer_rect: egui::Rect,
+    /// True while a middle-button press that started over the viewer is held.
+    /// Tracked here because those events are stripped from `RawInput` and
+    /// therefore never reach `InputState::pointer`.
+    middle_pan_active: bool,
     // Find-bar state (current-document search)
     search: SearchState,
     // Recently opened files (most-recent first), shown on the welcome page
@@ -1539,9 +1830,19 @@ impl MarkdownApp {
         // loads it if present. This purges the old blob so it doesn't waste startup time/RAM.
         cc.egui_ctx.memory_mut(|mem| mem.data = Default::default());
 
-        // Disable egui's built-in Ctrl+/- zoom — we handle zoom ourselves
+        // Disable egui's built-in Ctrl+/- scaling — we persist and apply the
+        // app-level scaling explicitly, while viewer zoom has separate input.
         cc.egui_ctx
             .options_mut(|opt| opt.zoom_with_keyboard = false);
+
+        // Touchpad pinch has to be sourced outside winit; see `pinch`.
+        let pinch = pinch::PinchGestures::new(
+            {
+                use raw_window_handle::HasDisplayHandle as _;
+                cc.display_handle().ok().map(|h| h.as_raw())
+            },
+            &cc.egui_ctx,
+        );
 
         // Set constant styles once at init (never changes at runtime)
         cc.egui_ctx.style_mut(|style| {
@@ -1577,7 +1878,11 @@ impl MarkdownApp {
         let dark_mode = persisted
             .dark_mode
             .unwrap_or_else(|| cc.egui_ctx.style().visuals.dark_mode);
-        let zoom_level = persisted.zoom_level.unwrap_or(1.0).clamp(0.5, 3.0);
+        let scaling = persisted
+            .scaling
+            .unwrap_or(1.0)
+            .clamp(MIN_SCALING, MAX_SCALING);
+        let viewer_zoom = quantize_viewer_zoom(persisted.viewer_zoom.unwrap_or(1.0));
         let show_outline = persisted.show_outline.unwrap_or(true);
         let full_width_content = persisted.full_width_content.unwrap_or(false);
         let show_explorer = persisted.show_explorer.unwrap_or(true);
@@ -1652,7 +1957,9 @@ impl MarkdownApp {
             tabs,
             active_tab,
             dark_mode,
-            zoom_level,
+            scaling,
+            viewer_zoom,
+            viewer_zoom_target: viewer_zoom,
             show_outline,
             full_width_content,
             watch_enabled: watch,
@@ -1674,8 +1981,13 @@ impl MarkdownApp {
             title_dirty: true,
             open_tab_paths: HashSet::new(),
             lightbox: None,
-            lightbox_scroll: 0.0,
+            lightbox_wheel_notches: 0.0,
+            lightbox_pan: egui::Vec2::ZERO,
+            pending_viewer_zoom: 1.0,
+            pinch,
             lightbox_open_count: 0,
+            viewer_rect: egui::Rect::NOTHING,
+            middle_pan_active: false,
             search: SearchState::default(),
             recent_files: persisted.recent_files.unwrap_or_default(),
             welcome_show_all: false,
@@ -1705,6 +2017,12 @@ impl MarkdownApp {
         } else {
             "Markdown Viewer".to_string()
         }
+    }
+
+    /// Toggle borderless fullscreen using the current native viewport state.
+    fn toggle_fullscreen(ctx: &egui::Context) {
+        let target = ctx.input(|i| toggled_fullscreen_state(i.viewport().fullscreen));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(target));
     }
 
     fn is_markdown_file(path: &std::path::Path) -> bool {
@@ -2914,6 +3232,14 @@ impl MarkdownApp {
 
     fn render_tab_content(&mut self, ui: &mut egui::Ui, ctrl_held: bool) -> Option<PathBuf> {
         let mut open_in_new_tab: Option<PathBuf> = None;
+        let viewer_zoom_before = self.viewer_zoom;
+        let mut viewer_zoom = viewer_zoom_before;
+        let mut viewer_zoom_target = self.viewer_zoom_target;
+        let mut zoom_anchor: Option<(egui::Pos2, f32, f32)> = None;
+        let middle_pan_active = self.middle_pan_active;
+        let mut viewer_rect = egui::Rect::NOTHING;
+        let pending_viewer_zoom = self.pending_viewer_zoom;
+        let lightbox_open = self.lightbox.is_some();
 
         // Snapshot search state before taking a mutable borrow on the active tab
         let search_is_open = self.search.is_open;
@@ -2921,6 +3247,7 @@ impl MarkdownApp {
 
         // No document open → render the welcome / idle page instead.
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            self.viewer_rect = egui::Rect::NOTHING;
             self.render_welcome(ui);
             return None;
         };
@@ -2951,9 +3278,47 @@ impl MarkdownApp {
                 ..Default::default()
             })
             .show(ui, |ui| {
-                // Capture scroll input for manual handling during selection
-                let raw_scroll = ui.ctx().input(|i| i.raw_scroll_delta.y);
                 let content_rect = ui.available_rect_before_wrap();
+                viewer_rect = content_rect;
+                let pointer_pos = ui.ctx().input(|i| i.pointer.hover_pos());
+                let pointer_over_content =
+                    !lightbox_open && pointer_pos.is_some_and(|pos| content_rect.contains(pos));
+                // Use only the raw factor collected in `raw_input_hook`. Mixing
+                // in `i.zoom_delta()` would apply the same gesture twice: egui
+                // derives it from the very same Ctrl+wheel events and then
+                // trickles the remainder out over the following frames.
+                let zoom_input = if pointer_over_content {
+                    sane_zoom_factor(pending_viewer_zoom)
+                } else {
+                    1.0
+                };
+                if pointer_over_content && (zoom_input - 1.0).abs() > f32::EPSILON {
+                    // Accumulate the gesture continuously, then snap for
+                    // display. Individual pinch updates are much smaller than
+                    // one ladder step, so rounding each one in isolation would
+                    // discard the whole gesture.
+                    viewer_zoom_target =
+                        (viewer_zoom_target * zoom_input).clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM);
+                    let new_zoom = quantize_viewer_zoom(viewer_zoom_target);
+                    if (new_zoom - viewer_zoom_before).abs() > f32::EPSILON {
+                        viewer_zoom = new_zoom;
+                        zoom_anchor = pointer_pos.map(|pos| (pos, viewer_zoom_before, new_zoom));
+                    }
+                }
+
+                // Wheel/touchpad scrolling that must keep working while a text
+                // selection drag is in progress. See the post-render block
+                // below for how it is applied.
+                let (raw_scroll, zoom_modifier_active) = ui.ctx().input(|i| {
+                    (
+                        i.raw_scroll_delta,
+                        i.modifiers.matches_any(egui::Modifiers::COMMAND),
+                    )
+                });
+                let previous_scroll_offset = tab.scroll_offset;
+                let previous_horizontal_scroll_offset = tab.horizontal_scroll_offset;
+                let previous_content_height = tab.last_content_height;
+                let previous_content_width = tab.last_content_width;
 
                 // The renderer owns the ScrollArea now (via show_scrollable),
                 // so we configure scroll_source / pending offset / content
@@ -2962,32 +3327,70 @@ impl MarkdownApp {
                 // selection-preserving wheel hack below.
                 let pending = tab.pending_scroll_offset.take();
                 let default_width = content_default_width(self.full_width_content);
-                let mut scroll_output = CommonMarkViewer::new()
-                    .default_implicit_uri_scheme(&tab.base_uri)
-                    .max_image_width(Some(800))
-                    .default_width(default_width)
-                    .indentation_spaces(2)
-                    .use_strong_font_family(true)
-                    .show_alt_text_on_hover(true)
-                    .syntax_theme_dark("base16-ocean.dark")
-                    .syntax_theme_light("base16-ocean.light")
-                    .line_height(1.5)
-                    .code_line_height(1.3)
-                    .paragraph_spacing(2.0)
-                    .heading_spacing_above(2.0)
-                    .heading_spacing_below(0.75)
-                    .content_version(tab.content_version)
-                    .pending_scroll_offset(pending)
-                    .scroll_source(egui::scroll_area::ScrollSource {
-                        scroll_bar: true,
-                        drag: false,
-                        mouse_wheel: true,
+                let mut scroll_output = ui
+                    .scope(|ui| {
+                        scale_viewer_style(ui, viewer_zoom);
+                        CommonMarkViewer::new()
+                            .default_implicit_uri_scheme(&tab.base_uri)
+                            .max_image_width(Some(800))
+                            .default_width(default_width)
+                            .content_scale(viewer_zoom)
+                            .scroll_axes([true, true])
+                            .indentation_spaces(2)
+                            .use_strong_font_family(true)
+                            .show_alt_text_on_hover(true)
+                            .syntax_theme_dark("base16-ocean.dark")
+                            .syntax_theme_light("base16-ocean.light")
+                            .line_height(1.5)
+                            .code_line_height(1.3)
+                            .paragraph_spacing(2.0)
+                            .heading_spacing_above(2.0)
+                            .heading_spacing_below(0.75)
+                            .content_version(tab.content_version)
+                            .pending_scroll_offset(pending)
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                scroll_bar: true,
+                                drag: false,
+                                mouse_wheel: true,
+                            })
+                            .show_scrollable(tab.id, ui, &mut tab.cache, &tab.content)
                     })
-                    .show_scrollable(tab.id, ui, &mut tab.cache, &tab.content);
+                    .inner;
 
                 tab.scroll_offset = scroll_output.state.offset.y;
+                tab.horizontal_scroll_offset = scroll_output.state.offset.x;
                 tab.last_viewport_height = scroll_output.inner_rect.height();
                 tab.last_content_height = scroll_output.content_size.y;
+                tab.last_content_width = scroll_output.content_size.x;
+
+                // Keep the document point beneath the pointer in place while
+                // the re-laid-out viewer changes size. This is the same anchor
+                // behavior users expect from browser zoom.
+                if let Some((pointer, _old_zoom, _new_zoom)) = zoom_anchor {
+                    let pointer_in_viewport = pointer - scroll_output.inner_rect.min;
+                    let max_y =
+                        (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+                    let max_x =
+                        (scroll_output.content_size.x - scroll_output.inner_rect.width()).max(0.0);
+                    scroll_output.state.offset.y = zoom_anchor_offset(
+                        previous_scroll_offset,
+                        previous_content_height,
+                        scroll_output.content_size.y,
+                        pointer_in_viewport.y,
+                        max_y,
+                    );
+                    scroll_output.state.offset.x = zoom_anchor_offset(
+                        previous_horizontal_scroll_offset,
+                        previous_content_width,
+                        scroll_output.content_size.x,
+                        pointer_in_viewport.x,
+                        max_x,
+                    );
+                    scroll_output.state.store(ui.ctx(), scroll_output.id);
+                    tab.scroll_offset = scroll_output.state.offset.y;
+                    tab.horizontal_scroll_offset = scroll_output.state.offset.x;
+                    ui.ctx().request_repaint();
+                }
 
                 // If the renderer recorded an exact y for the active match, check
                 // whether the current scroll position keeps it visible. If not,
@@ -3040,34 +3443,80 @@ impl MarkdownApp {
                     }
                 }
 
-                // Manual scroll handling for mouse wheel during text selection
-                let pointer_over_content = ui.ctx().input(|i| {
-                    i.pointer
-                        .hover_pos()
-                        .is_some_and(|pos| content_rect.contains(pos))
-                });
-                if raw_scroll.abs() > 0.0 && pointer_over_content {
-                    let current_offset = scroll_output.state.offset.y;
-                    let max_scroll = (tab.last_content_height - content_rect.height()).max(0.0);
-                    let new_offset = (current_offset - raw_scroll).clamp(0.0, max_scroll);
+                // Manual scroll handling: keeps the wheel working while a text
+                // selection drag is in progress, and it is also what gives the
+                // viewer its scroll speed — it runs on both axes so a diagonal
+                // touchpad gesture keeps its direction instead of picking up a
+                // vertical-only correction. Skipped while the zoom modifier is
+                // held, because `raw_scroll_delta` still carries Ctrl+wheel
+                // deltas that were already consumed as zoom.
+                if raw_scroll.length_sq() > 0.0 && pointer_over_content && !zoom_modifier_active {
+                    let current = scroll_output.state.offset;
+                    let max_y = (tab.last_content_height - content_rect.height()).max(0.0);
+                    let max_x =
+                        (scroll_output.content_size.x - scroll_output.inner_rect.width()).max(0.0);
+                    let step = raw_scroll * viewer_scroll_speed();
+                    let new_y = (current.y - step.y).clamp(0.0, max_y);
+                    let new_x = (current.x - step.x).clamp(0.0, max_x);
 
                     // Don't store at boundaries (can break selection)
-                    let would_hit_top = new_offset < 0.5;
-                    let would_hit_bottom = new_offset > max_scroll - 0.5;
-                    let offset_changed = (new_offset - current_offset).abs() > 0.5;
+                    let would_hit_top = new_y < 0.5;
+                    let would_hit_bottom = new_y > max_y - 0.5;
+                    let y_changed =
+                        (new_y - current.y).abs() > 0.5 && !would_hit_top && !would_hit_bottom;
+                    let x_changed = (new_x - current.x).abs() > 0.5;
 
-                    if offset_changed && !would_hit_top && !would_hit_bottom {
-                        scroll_output.state.offset.y = new_offset;
+                    if y_changed {
+                        scroll_output.state.offset.y = new_y;
+                    }
+                    if x_changed {
+                        scroll_output.state.offset.x = new_x;
+                    }
+                    if y_changed || x_changed {
                         scroll_output.state.store(ui.ctx(), scroll_output.id);
+                        tab.scroll_offset = scroll_output.state.offset.y;
+                        tab.horizontal_scroll_offset = scroll_output.state.offset.x;
                         ui.ctx().request_repaint();
                     }
                 }
 
+                // Middle-button drag pans the viewer. The press/release pair is
+                // stripped in `raw_input_hook`, so `middle_pan_active` (not
+                // `i.pointer.middle_down()`) is the source of truth here and no
+                // text selection is started by the drag. Only pointer motion
+                // still comes from egui.
+                if middle_pan_active {
+                    let pointer_delta = ui.ctx().input(|i| i.pointer.delta());
+                    let max_x =
+                        (scroll_output.content_size.x - scroll_output.inner_rect.width()).max(0.0);
+                    let max_y =
+                        (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+                    let old_offset = scroll_output.state.offset;
+                    scroll_output.state.offset.x =
+                        (old_offset.x - pointer_delta.x).clamp(0.0, max_x);
+                    scroll_output.state.offset.y =
+                        (old_offset.y - pointer_delta.y).clamp(0.0, max_y);
+                    if scroll_output.state.offset != old_offset {
+                        scroll_output.state.store(ui.ctx(), scroll_output.id);
+                        tab.scroll_offset = scroll_output.state.offset.y;
+                        tab.horizontal_scroll_offset = scroll_output.state.offset.x;
+                        ui.ctx().request_repaint();
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+
                 // Request repaint during smooth scrolling
-                if ui.ctx().input(|i| i.smooth_scroll_delta.length_sq() > 0.0) {
+                if ui.ctx().input(|i| {
+                    i.smooth_scroll_delta.length_sq() > 0.0
+                        || (i.zoom_delta() - 1.0).abs() > f32::EPSILON
+                }) {
                     ui.ctx().request_repaint();
                 }
             });
+
+        self.viewer_zoom = viewer_zoom;
+        self.viewer_zoom_target = viewer_zoom_target;
+        self.viewer_rect = viewer_rect;
 
         // Check for clicked links
         if let Some(clicked_link) = tab.check_link_hooks() {
@@ -3491,12 +3940,16 @@ impl MarkdownApp {
                 }
             });
 
-        // 3. Apply scroll-wheel zoom (proportional to scroll amount for smooth feel)
+        // 3. Apply zoom from a mouse wheel and from pinch / Ctrl+wheel.
+        // A touchpad swipe is deliberately excluded here — it pans below.
         let old_zoom = lightbox.zoom;
-        if self.lightbox_scroll != 0.0 {
+        let mut zoom_factor = sane_zoom_factor(self.pending_viewer_zoom);
+        if self.lightbox_wheel_notches != 0.0 {
             // ~10% per scroll notch, smooth with proportional delta
-            let factor = (1.0_f32 + self.lightbox_scroll * 0.08).clamp(0.5, 2.0);
-            lightbox.zoom = (lightbox.zoom * factor).clamp(0.1, 10.0);
+            zoom_factor *= (1.0_f32 + self.lightbox_wheel_notches * 0.08).clamp(0.5, 2.0);
+        }
+        if (zoom_factor - 1.0).abs() > f32::EPSILON {
+            lightbox.zoom = (lightbox.zoom * zoom_factor).clamp(0.1, 10.0);
         }
         let zoom_changed = (lightbox.zoom - old_zoom).abs() > f32::EPSILON;
 
@@ -3558,7 +4011,31 @@ impl MarkdownApp {
             None
         };
 
-        if let Some(offset) = pre_offset {
+        // Two-finger touchpad movement pans the image. Wheel events are
+        // stripped from RawInput while the lightbox is open, so the ScrollArea
+        // never sees them and the offset has to be driven explicitly.
+        let forced_offset = if self.lightbox_pan == egui::Vec2::ZERO {
+            pre_offset
+        } else {
+            let base = pre_offset.unwrap_or(lightbox.scroll_offset);
+            let content = egui::vec2(
+                display_size.x.max(area_size.x),
+                display_size.y.max(area_size.y),
+            );
+            let max_offset = egui::vec2(
+                (content.x - area_size.x).max(0.0),
+                (content.y - area_size.y).max(0.0),
+            );
+            // Same pacing as the document viewer, so a swipe covers a
+            // comparable distance in both.
+            let step = self.lightbox_pan * viewer_scroll_speed();
+            Some(egui::vec2(
+                (base.x - step.x).clamp(0.0, max_offset.x),
+                (base.y - step.y).clamp(0.0, max_offset.y),
+            ))
+        };
+
+        if let Some(offset) = forced_offset {
             lightbox.scroll_offset = offset;
         }
 
@@ -3586,7 +4063,7 @@ impl MarkdownApp {
 
                 // Set the pre-computed offset so ScrollArea renders at the
                 // correct position on this frame (avoids one-frame lag).
-                if let Some(offset) = pre_offset {
+                if let Some(offset) = forced_offset {
                     scroll_area = scroll_area
                         .horizontal_scroll_offset(offset.x)
                         .vertical_scroll_offset(offset.y);
@@ -3624,7 +4101,7 @@ impl MarkdownApp {
                 });
 
                 // Sync tracking: captures drag-to-scroll changes on non-zoom frames
-                if pre_offset.is_none() {
+                if forced_offset.is_none() {
                     lightbox.scroll_offset = scroll_output.state.offset;
                 }
             });
@@ -3654,20 +4131,43 @@ impl MarkdownApp {
                 }
             });
 
-        // 6. Zoom indicator (bottom-center) when zoom ≠ 100%
+        // 6. Zoom indicator (bottom-center) when zoom ≠ 100%. Like the top-bar
+        // readouts, clicking it resets to 100%.
         let zoom_pct = (lightbox.zoom * 100.0).round() as i32;
+        let mut reset_lightbox_zoom = false;
         if zoom_pct != 100 {
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("lightbox_zoom_indicator").with(oid),
-            ))
-            .text(
-                egui::pos2(screen_rect.center().x, screen_rect.bottom() - 24.0),
-                egui::Align2::CENTER_CENTER,
-                format!("{zoom_pct}%"),
-                egui::FontId::proportional(16.0),
-                egui::Color32::from_gray(180),
-            );
+            egui::Area::new(egui::Id::new("lightbox_zoom_indicator").with(oid))
+                .order(egui::Order::Tooltip)
+                .movable(false)
+                .fixed_pos(egui::pos2(
+                    screen_rect.center().x - 40.0,
+                    screen_rect.bottom() - 36.0,
+                ))
+                .show(ctx, |ui| {
+                    ui.set_min_width(80.0);
+                    ui.vertical_centered(|ui| {
+                        let label = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{zoom_pct}%"))
+                                    .size(16.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if label.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if label.on_hover_text("Click to reset zoom to 100%").clicked() {
+                            reset_lightbox_zoom = true;
+                        }
+                    });
+                });
+        }
+        if reset_lightbox_zoom {
+            if let Some(lb) = &mut self.lightbox {
+                lb.zoom = 1.0;
+                lb.scroll_offset = egui::Vec2::ZERO;
+            }
         }
 
         // 7. Escape to close
@@ -3691,19 +4191,142 @@ impl eframe::App for MarkdownApp {
             self.mcp_bridge.inject_raw_input(raw_input);
         }
 
-        // When lightbox is open, intercept scroll events before they reach InputState.
-        // This prevents the document's ScrollArea from scrolling while letting us
-        // use the captured delta for lightbox zoom.
-        self.lightbox_scroll = 0.0;
+        // Collect viewer zoom straight from the raw event stream. egui also
+        // derives `zoom_delta()` from the same events, but it spreads a single
+        // gesture across several frames of smoothing; consuming the raw
+        // factors here keeps one gesture worth of input in one frame and
+        // avoids applying the same scroll twice.
+        //
+        // Three sources feed viewer zoom, in priority order:
+        //   1. Touchpad pinch, which on Linux does not come through winit at
+        //      all and is sourced from the compositor directly (see `pinch`).
+        //   2. `Event::Zoom`, which winit only produces on platforms with a
+        //      gesture backend (macOS).
+        //   3. Ctrl + wheel / Ctrl + two-finger scroll.
+        self.pending_viewer_zoom = 1.0;
+
+        let viewport_height = raw_input
+            .screen_rect
+            .map_or(800.0, |screen_rect| screen_rect.height());
+        let pinch_zoom = sane_zoom_factor(self.pinch.take_zoom_factor());
+        let saw_pinch = (pinch_zoom - 1.0).abs() > f32::EPSILON;
+        let mut native_zoom = 1.0;
+        let mut wheel_zoom = 1.0;
+        let mut saw_native_zoom = false;
+        let mut saw_zoom_modifier = false;
+
+        for event in &raw_input.events {
+            match event {
+                egui::Event::Zoom(factor) => {
+                    let factor = sane_zoom_factor(*factor);
+                    if (factor - 1.0).abs() > f32::EPSILON {
+                        native_zoom *= factor;
+                        saw_native_zoom = true;
+                    }
+                }
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } if modifiers.matches_any(egui::Modifiers::COMMAND) => {
+                    wheel_zoom *= wheel_zoom_factor(*unit, *delta, viewport_height);
+                    saw_zoom_modifier = true;
+                }
+                _ => {}
+            }
+        }
+
+        self.pending_viewer_zoom = sane_zoom_factor(if saw_pinch {
+            pinch_zoom
+        } else if saw_native_zoom {
+            native_zoom
+        } else if saw_zoom_modifier {
+            wheel_zoom
+        } else {
+            1.0
+        });
+
+        // Middle button over the viewer is a pan handle, never a selection
+        // handle. egui's label selection starts on `pointer.any_pressed()`,
+        // which includes the middle button, so the only reliable way to keep a
+        // middle drag from marking text is to remove the press/release pair
+        // before `InputState` ever sees it. Presses outside the viewer are
+        // left alone so middle-click-to-close still works on tabs and in the
+        // file explorer.
+        let viewer_rect = self.viewer_rect;
+        let lightbox_open = self.lightbox.is_some();
+        raw_input.events.retain(|event| {
+            let egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Middle,
+                pressed,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if *pressed {
+                if !lightbox_open && viewer_rect.contains(*pos) {
+                    self.middle_pan_active = true;
+                    return false;
+                }
+                return true;
+            }
+            // Swallow the release of a swallowed press, wherever it lands, so
+            // egui never sees an unpaired button release.
+            if self.middle_pan_active {
+                self.middle_pan_active = false;
+                return false;
+            }
+            true
+        });
+        // A focus loss (or any other reason egui drops the pointer) would
+        // otherwise leave the pan latched forever.
+        if self.middle_pan_active
+            && raw_input.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::PointerGone | egui::Event::WindowFocused(false)
+                )
+            })
+        {
+            self.middle_pan_active = false;
+        }
+
+        // When the lightbox is open it takes over wheel and gesture input, and
+        // those events are stripped so the document viewer underneath the
+        // overlay does not react to them as well.
+        //
+        // Wheel unit is what separates a mouse from a touchpad: winit reports a
+        // mouse wheel in `Line` units and a touchpad swipe in `Point` units. So
+        // a wheel notch zooms the image, while a two-finger swipe pans it —
+        // matching what an image viewer does. Pinch and Ctrl+wheel zoom through
+        // `pending_viewer_zoom`, which the lightbox consumes while it is open.
+        self.lightbox_wheel_notches = 0.0;
+        self.lightbox_pan = egui::Vec2::ZERO;
         if self.lightbox.is_some() {
             for event in &raw_input.events {
-                if let egui::Event::MouseWheel { delta, .. } = event {
-                    self.lightbox_scroll += delta.y;
+                let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } = event
+                else {
+                    continue;
+                };
+                if modifiers.matches_any(egui::Modifiers::COMMAND) {
+                    continue; // already folded into `pending_viewer_zoom`
+                }
+                match unit {
+                    egui::MouseWheelUnit::Point => self.lightbox_pan += *delta,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
+                        self.lightbox_wheel_notches += delta.y;
+                    }
                 }
             }
             raw_input
                 .events
-                .retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+                .retain(|e| !matches!(e, egui::Event::MouseWheel { .. } | egui::Event::Zoom(_)));
         }
     }
 
@@ -3715,7 +4338,8 @@ impl eframe::App for MarkdownApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let state = PersistedState {
             dark_mode: Some(self.dark_mode),
-            zoom_level: Some(self.zoom_level),
+            scaling: Some(self.scaling),
+            viewer_zoom: Some(self.viewer_zoom),
             show_outline: Some(self.show_outline),
             full_width_content: Some(self.full_width_content),
             open_tabs: Some(self.get_open_tab_paths()),
@@ -3794,7 +4418,7 @@ impl eframe::App for MarkdownApp {
             ctx.set_visuals(visuals);
         }
 
-        ctx.set_zoom_factor(self.zoom_level);
+        ctx.set_zoom_factor(self.scaling);
 
         // Update window title only when dirty
         if self.title_dirty {
@@ -3813,7 +4437,7 @@ impl eframe::App for MarkdownApp {
         let mut toggle_outline = false;
         let mut toggle_explorer = false;
         let mut quit_app = false;
-        let mut zoom_delta: f32 = 0.0;
+        let mut scaling_delta: f32 = 0.0;
         let mut go_back = false;
         let mut go_forward = false;
         let mut close_tab = false;
@@ -3827,36 +4451,41 @@ impl eframe::App for MarkdownApp {
         let mut close_search_kb = false;
         let mut keyboard_scroll_action: Option<KeyboardScrollAction> = None;
 
-        // Ctrl+/- zoom: applies to lightbox when open, document otherwise
+        // Ctrl+/- changes global UI scaling. Lightbox image zoom keeps its
+        // existing keyboard behavior while it is open.
         ctx.input(|i| {
             if i.modifiers.ctrl
                 && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
             {
-                zoom_delta = 0.1;
+                scaling_delta = 0.1;
             }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Minus) {
-                zoom_delta = -0.1;
+                scaling_delta = -0.1;
             }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Num0) {
                 if self.lightbox.is_some() {
                     // Reset lightbox zoom
-                    zoom_delta = 0.0;
+                    scaling_delta = 0.0;
                     if let Some(lb) = &mut self.lightbox {
                         lb.zoom = 1.0;
                     }
                 } else {
-                    zoom_delta = 1.0 - self.zoom_level;
+                    scaling_delta = 1.0 - self.scaling;
                 }
             }
         });
 
-        // Apply zoom to lightbox or document
-        if zoom_delta != 0.0 {
+        // Apply the keyboard scaling step to the lightbox or app chrome.
+        if scaling_delta != 0.0 {
             if let Some(lb) = &mut self.lightbox {
-                let factor = if zoom_delta > 0.0 { 1.25 } else { 1.0 / 1.25 };
+                let factor = if scaling_delta > 0.0 {
+                    1.25
+                } else {
+                    1.0 / 1.25
+                };
                 lb.zoom = (lb.zoom * factor).clamp(0.1, 10.0);
             } else {
-                self.zoom_level = (self.zoom_level + zoom_delta).clamp(0.5, 3.0);
+                self.scaling = (self.scaling + scaling_delta).clamp(MIN_SCALING, MAX_SCALING);
             }
         }
 
@@ -3924,16 +4553,6 @@ impl eframe::App for MarkdownApp {
                 // Ctrl+Q: Quit
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Q) {
                     quit_app = true;
-                }
-                // Ctrl + scroll wheel for zoom
-                if i.modifiers.ctrl && i.raw_scroll_delta.y != 0.0 {
-                    self.zoom_level = (self.zoom_level
-                        + if i.raw_scroll_delta.y > 0.0 {
-                            0.1
-                        } else {
-                            -0.1
-                        })
-                    .clamp(0.5, 3.0);
                 }
                 // F5: Toggle file watching
                 if i.key_pressed(egui::Key::F5) {
@@ -4083,8 +4702,13 @@ impl eframe::App for MarkdownApp {
         // Get ctrl state for link handling
         let ctrl_held = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
-        // Menu bar
+        // Menu bar. The unused area doubles as a lightweight title bar: a
+        // primary-button double-click toggles borderless fullscreen, matching
+        // the familiar desktop window-bar gesture without intercepting menu
+        // and navigation controls.
+        let mut menu_bar_rect = egui::Rect::NOTHING;
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            menu_bar_rect = ui.max_rect();
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
@@ -4265,42 +4889,81 @@ impl eframe::App for MarkdownApp {
 
                     ui.separator();
 
-                    let zoom_in_btn = ui.add(egui::Button::new("Zoom In").shortcut_text("Ctrl++"));
+                    let scaling_in_btn =
+                        ui.add(egui::Button::new("Scale Up").shortcut_text("Ctrl++"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Zoom In",
+                        "Menu: View → Scale Up",
                         "button",
-                        &zoom_in_btn,
+                        &scaling_in_btn,
                         None,
                     );
-                    if zoom_in_btn.clicked() {
-                        self.zoom_level = (self.zoom_level + 0.1).min(3.0);
+                    if scaling_in_btn.clicked() {
+                        self.scaling = (self.scaling + 0.1).min(MAX_SCALING);
                         ui.close();
                     }
-                    let zoom_out_btn =
-                        ui.add(egui::Button::new("Zoom Out").shortcut_text("Ctrl+-"));
+                    let scaling_out_btn =
+                        ui.add(egui::Button::new("Scale Down").shortcut_text("Ctrl+-"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Zoom Out",
+                        "Menu: View → Scale Down",
                         "button",
-                        &zoom_out_btn,
+                        &scaling_out_btn,
                         None,
                     );
-                    if zoom_out_btn.clicked() {
-                        self.zoom_level = (self.zoom_level - 0.1).max(0.5);
+                    if scaling_out_btn.clicked() {
+                        self.scaling = (self.scaling - 0.1).max(MIN_SCALING);
                         ui.close();
                     }
-                    let reset_zoom_btn =
-                        ui.add(egui::Button::new("Reset Zoom").shortcut_text("Ctrl+0"));
+                    let reset_scaling_btn =
+                        ui.add(egui::Button::new("Reset Scaling").shortcut_text("Ctrl+0"));
                     #[cfg(feature = "mcp")]
                     self.mcp_bridge.register_widget(
-                        "Menu: View → Reset Zoom",
+                        "Menu: View → Reset Scaling",
                         "button",
-                        &reset_zoom_btn,
+                        &reset_scaling_btn,
                         None,
                     );
-                    if reset_zoom_btn.clicked() {
-                        self.zoom_level = 1.0;
+                    if reset_scaling_btn.clicked() {
+                        self.scaling = 1.0;
+                        ui.close();
+                    }
+
+                    ui.separator();
+                    ui.label(format!(
+                        "Viewer zoom: {}%",
+                        (self.viewer_zoom * 100.0).round() as i32
+                    ));
+                    let reset_viewer_zoom_btn = ui.button("Reset Viewer Zoom");
+                    #[cfg(feature = "mcp")]
+                    self.mcp_bridge.register_widget(
+                        "Menu: View → Reset Viewer Zoom",
+                        "button",
+                        &reset_viewer_zoom_btn,
+                        None,
+                    );
+                    if reset_viewer_zoom_btn.clicked() {
+                        self.viewer_zoom = 1.0;
+                        self.viewer_zoom_target = 1.0;
+                        ui.close();
+                    }
+
+                    let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    let fullscreen_text = if fullscreen {
+                        "✓ Fullscreen"
+                    } else {
+                        "Fullscreen"
+                    };
+                    let fullscreen_btn = ui.button(fullscreen_text);
+                    #[cfg(feature = "mcp")]
+                    self.mcp_bridge.register_widget(
+                        "Menu: View → Fullscreen",
+                        "button",
+                        &fullscreen_btn,
+                        Some(if fullscreen { "on" } else { "off" }),
+                    );
+                    if fullscreen_btn.clicked() {
+                        Self::toggle_fullscreen(ctx);
                         ui.close();
                     }
                 });
@@ -4338,16 +5001,41 @@ impl eframe::App for MarkdownApp {
 
                 // Show status on the right
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Show zoom level if not at 100%
-                    if (self.zoom_level - 1.0).abs() > 0.01 {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}%",
-                                (self.zoom_level * 100.0).round() as i32
-                            ))
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
+                    // Show app scaling and viewer zoom if not at 100%. Each
+                    // readout doubles as its own reset button — it is only
+                    // visible when off 100%, which is exactly when a reset is
+                    // worth offering.
+                    if (self.scaling - 1.0).abs() > 0.01 {
+                        let label = zoom_readout(
+                            ui,
+                            &format!("Scale {}%", (self.scaling * 100.0).round() as i32),
+                            "Click to reset app scaling to 100%",
                         );
+                        #[cfg(feature = "mcp")]
+                        self.mcp_bridge
+                            .register_widget("Reset Scaling", "button", &label, None);
+                        if label.clicked() {
+                            self.scaling = 1.0;
+                        }
+                        ui.separator();
+                    }
+                    if (self.viewer_zoom - 1.0).abs() > 0.01 {
+                        let label = zoom_readout(
+                            ui,
+                            &format!("Viewer {}%", (self.viewer_zoom * 100.0).round() as i32),
+                            "Click to reset viewer zoom to 100%",
+                        );
+                        #[cfg(feature = "mcp")]
+                        self.mcp_bridge.register_widget(
+                            "Reset Viewer Zoom",
+                            "button",
+                            &label,
+                            None,
+                        );
+                        if label.clicked() {
+                            self.viewer_zoom = 1.0;
+                            self.viewer_zoom_target = 1.0;
+                        }
                         ui.separator();
                     }
 
@@ -4375,6 +5063,17 @@ impl eframe::App for MarkdownApp {
                 });
             });
         });
+
+        let title_bar_double_clicked = ctx.input(|i| {
+            i.pointer
+                .button_double_clicked(egui::PointerButton::Primary)
+                && i.pointer
+                    .hover_pos()
+                    .is_some_and(|pointer| menu_bar_rect.contains(pointer))
+        });
+        if title_bar_double_clicked && !ctx.is_using_pointer() {
+            Self::toggle_fullscreen(ctx);
+        }
 
         // Handle navigation button clicks (must be after menu bar UI)
         if go_back {
@@ -4566,32 +5265,32 @@ mod tests {
 
     #[test]
     fn default_terminal_launch_detaches() {
-        let args = Args::try_parse_from(["md-viewer", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "README.md"]).unwrap();
         assert!(should_detach(&args, true));
     }
 
     #[test]
     fn non_terminal_launch_does_not_detach() {
-        let args = Args::try_parse_from(["md-viewer", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "README.md"]).unwrap();
         assert!(!should_detach(&args, false));
     }
 
     #[test]
     fn foreground_flag_disables_detach() {
-        let args = Args::try_parse_from(["md-viewer", "--foreground", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "--foreground", "README.md"]).unwrap();
         assert!(!should_detach(&args, true));
     }
 
     #[test]
     fn hidden_no_detach_marker_disables_detach() {
-        let args = Args::try_parse_from(["md-viewer", "--no-detach", "README.md"]).unwrap();
+        let args = Args::try_parse_from(["mkdv", "--no-detach", "README.md"]).unwrap();
         assert!(!should_detach(&args, true));
     }
 
     #[test]
     fn child_args_preserve_user_args_and_append_marker() {
         let child_args = child_args_with_no_detach([
-            OsString::from("md-viewer"),
+            OsString::from("mkdv"),
             OsString::from("README.md"),
             OsString::from("--no-watch"),
         ]);
@@ -4609,7 +5308,7 @@ mod tests {
     #[test]
     fn child_args_insert_marker_before_double_dash() {
         let child_args = child_args_with_no_detach([
-            OsString::from("md-viewer"),
+            OsString::from("mkdv"),
             OsString::from("--"),
             OsString::from("README.md"),
         ]);
@@ -4630,7 +5329,33 @@ mod tests {
 
         let help = Args::command().render_long_help().to_string();
         assert!(help.contains("--foreground"));
+        assert!(help.contains("--install-desktop"));
         assert!(!help.contains("--no-detach"));
+    }
+
+    #[test]
+    fn desktop_entry_uses_the_installed_executable_path() {
+        let contents = desktop_entry_contents(Path::new("/home/alice/.cargo/bin/mkdv"));
+        assert!(contents.contains("Exec=\"/home/alice/.cargo/bin/mkdv\" %f"));
+        assert!(contents.contains("StartupWMClass=mkdv"));
+        // The name the installed `hicolor/scalable/apps/mkdv.svg` resolves under.
+        assert!(contents.contains("Icon=mkdv"));
+    }
+
+    #[test]
+    fn window_icon_decodes_to_a_square_rgba_buffer() {
+        let icon = window_icon().expect("embedded PNG should decode");
+        assert_eq!(icon.width, icon.height);
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+    }
+
+    #[test]
+    fn desktop_exec_path_quotes_special_characters() {
+        let path = Path::new("/home/alice/Apps/$notes\\viewer\"v1/mkdv");
+        assert_eq!(
+            desktop_exec_path(path),
+            "\"/home/alice/Apps/\\$notes\\\\viewer\\\"v1/mkdv\""
+        );
     }
 
     #[test]
@@ -4641,6 +5366,96 @@ mod tests {
     #[test]
     fn full_width_content_uses_available_width() {
         assert_eq!(content_default_width(true), None);
+    }
+
+    #[test]
+    fn fullscreen_toggle_enters_from_unknown_or_windowed_state() {
+        assert!(toggled_fullscreen_state(None));
+        assert!(toggled_fullscreen_state(Some(false)));
+    }
+
+    #[test]
+    fn fullscreen_toggle_leaves_fullscreen_state() {
+        assert!(!toggled_fullscreen_state(Some(true)));
+    }
+
+    #[test]
+    fn wheel_zoom_factor_matches_egui_line_scroll_units() {
+        let factor = wheel_zoom_factor(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0), 800.0);
+        assert!((factor - (0.2_f32).exp()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn malformed_zoom_factors_are_ignored() {
+        assert_eq!(sane_zoom_factor(f32::NAN), 1.0);
+        assert_eq!(sane_zoom_factor(f32::INFINITY), 1.0);
+        assert_eq!(sane_zoom_factor(0.0), 1.0);
+    }
+
+    #[test]
+    fn viewer_zoom_minimum_stays_readable() {
+        assert_eq!(MIN_VIEWER_ZOOM, 0.75);
+    }
+
+    #[test]
+    fn zoom_ladder_has_an_exact_100_percent_level() {
+        // 100% must be reachable exactly, or "reset" and the zoom readout
+        // would disagree with what the ladder can actually display.
+        assert_eq!(quantize_viewer_zoom(1.0), 1.0);
+    }
+
+    #[test]
+    fn zoom_ladder_snaps_to_the_nearest_level() {
+        // Just past halfway to the next step rounds up, just under rounds
+        // back down to the level the viewer is already rendering.
+        assert_eq!(quantize_viewer_zoom(1.015), VIEWER_ZOOM_STEP);
+        assert_eq!(quantize_viewer_zoom(1.005), 1.0);
+    }
+
+    #[test]
+    fn zoom_ladder_stays_inside_the_supported_range() {
+        assert_eq!(quantize_viewer_zoom(100.0), MAX_VIEWER_ZOOM);
+        assert_eq!(quantize_viewer_zoom(0.01), MIN_VIEWER_ZOOM);
+        // A malformed factor must not poison the persisted zoom.
+        assert_eq!(quantize_viewer_zoom(f32::NAN), 1.0);
+        assert_eq!(quantize_viewer_zoom(-1.0), 1.0);
+    }
+
+    #[test]
+    fn zoom_ladder_keeps_step_count_low_enough_to_cache() {
+        // The whole point of snapping is a small set of distinct font sizes.
+        let levels = (MAX_VIEWER_ZOOM.ln() - MIN_VIEWER_ZOOM.ln()) / VIEWER_ZOOM_STEP.ln();
+        assert!(levels < 100.0, "zoom ladder has {levels} levels");
+    }
+
+    #[test]
+    fn zoom_anchor_keeps_pointer_position_proportional() {
+        // The pointer is 100px into a 1000px document, 200px scrolled down.
+        // Doubling the layout height should keep that same document fraction
+        // under the pointer.
+        let offset = zoom_anchor_offset(200.0, 1_000.0, 2_000.0, 100.0, 1_500.0);
+        assert_eq!(offset, 500.0);
+    }
+
+    #[test]
+    fn zoom_anchor_clamps_to_new_scroll_bounds() {
+        let offset = zoom_anchor_offset(900.0, 1_000.0, 1_100.0, 900.0, 100.0);
+        assert_eq!(offset, 100.0);
+    }
+
+    #[test]
+    fn zoom_anchor_uses_prezoom_offset_when_new_content_clamps() {
+        // The new layout's maximum offset is smaller than the old offset. The
+        // anchor must still use the pre-zoom position rather than egui's
+        // already-clamped post-layout state.
+        let offset = zoom_anchor_offset(900.0, 2_000.0, 1_000.0, 100.0, 500.0);
+        assert_eq!(offset, 400.0);
+    }
+
+    #[test]
+    fn zoom_anchor_handles_unmeasured_content() {
+        let offset = zoom_anchor_offset(24.0, 0.0, 1_000.0, 100.0, 300.0);
+        assert_eq!(offset, 24.0);
     }
 
     #[test]

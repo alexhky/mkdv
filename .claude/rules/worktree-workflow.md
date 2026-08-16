@@ -1,69 +1,74 @@
-# Worktree Workflow
+# Branch and Worktree Workflow
 
-This repo uses a bare repository setup at `~/markdown-viewer/.bare`. All worktrees live inside `~/markdown-viewer/worktrees/`.
+This repository works as a standard Git checkout. Do not assume a particular
+home-directory layout, a bare repository at `.bare`, or a shared `worktrees/`
+directory. Feature branches are required before editing because the branch
+protection hook rejects changes on `main`; additional Git worktrees are
+optional.
 
-## Directory Structure
+## Before Editing
 
-```
-~/markdown-viewer/
-├── .bare/                      # Bare git repository
-├── .claude -> worktrees/main/.claude  # Symlink to tracked config
-└── worktrees/
-    ├── main/
-    │   └── .claude/            # Claude Code config (tracked in git)
-    └── <feature-name>/         # Feature worktrees
-```
-
-## Creating a Feature Worktree
-
-When asked to implement a feature that requires a new branch, **automatically create a worktree from main**:
+Check the active branch and preserve existing worktree changes:
 
 ```bash
-# Create worktree from current main (ALWAYS specify main as start point)
-git -C ~/markdown-viewer/.bare worktree add \
-    ~/markdown-viewer/worktrees/<name> -b feature/<name> main
-
-# Change to the new worktree
-cd ~/markdown-viewer/worktrees/<name>
-
-# Create devlog (see devlog-workflow.md for automation)
-LAST=$(ls docs/devlog/[0-9]*.md 2>/dev/null | sort | tail -1 | grep -oP '\d{3}' | head -1)
-NEXT=$(printf "%03d" $((10#$LAST + 1)))
-cp docs/devlog/TEMPLATE.md docs/devlog/${NEXT}-<name>.md
-
-# Verify main is up to date with remote before branching
-git fetch origin 2>/dev/null
-git log --oneline main..origin/main
+git branch --show-current
+git status --short
+git log --oneline -5
 ```
 
-If the last command shows commits, main is behind remote. Update main first:
-```bash
-git -C ~/markdown-viewer/.bare fetch origin main:main
-```
-
-Devlog MUST exist before any commits. Infrastructure and "phase work" still require devlogs.
-
-Claude Code automatically finds `.claude/rules/` by searching parent directories (via the root symlink).
-
-## Managing Worktrees
+If the current branch is `main`, create a scoped branch in the current checkout:
 
 ```bash
-git -C ~/markdown-viewer/.bare worktree list              # See all worktrees
-git -C ~/markdown-viewer/.bare worktree remove \
-    ~/markdown-viewer/worktrees/<name>                    # Remove after merge
+git switch -c feature/<short-name>
+# or: git switch -c fix/<short-name>
+# or: git switch -c docs/<short-name>
 ```
+
+Branch creation keeps uncommitted files in place. Treat existing modifications
+as user-owned and do not overwrite, discard, or include them accidentally.
+
+## Optional Separate Worktree
+
+Use a separate worktree when isolation or concurrent branch work is useful.
+Run this from the repository root and choose an explicit sibling path:
+
+```bash
+git fetch origin
+git worktree add ../mkdv-<short-name> -b feature/<short-name> origin/main
+cd ../mkdv-<short-name>
+```
+
+If network access is unavailable but local `main` is known to be current, use
+`main` as the final argument instead of `origin/main`.
+
+List and remove optional worktrees with:
+
+```bash
+git worktree list
+git worktree remove ../mkdv-<short-name>
+```
+
+Never remove a worktree that contains uncommitted changes without explicit user
+approval.
+
+## Feature Documentation
+
+User-facing feature work and substantial fixes should add a numbered devlog;
+see `devlog-workflow.md`. Start from `docs/devlog/TEMPLATE.md` and choose the
+next available number. Small documentation-only corrections do not need a
+devlog unless the user requests one.
 
 ## Before Writing Code
 
-These checks happen automatically (see `context-awareness.md`), but ensure:
+These checks are also covered by `context-awareness.md`:
 
-1. **Read files you'll modify** - Use Read tool, don't rely on memory
-2. **Check recent commits** - `git log --oneline -10`
-3. **Check LESSONS.md** - Search for relevant gotchas
-4. **Preserve existing patterns** - If code uses `.scroll_source()`, keep it
-
-See `context-awareness.md` and `refactoring-rules.md` for full guidelines.
+1. Read every file you will modify.
+2. Check recent commits relevant to the area.
+3. Search `docs/LESSONS.md` for related gotchas.
+4. Preserve established egui and renderer patterns.
+5. Confirm the active branch is not `main`.
 
 ## Branch Protection
 
-A Claude Code hook prevents editing files on `main` branch. Create a feature worktree for all new work.
+The hook in `.claude/hooks/` prevents edits on `main`. A branch is mandatory;
+a separate worktree is a workflow choice, not a repository requirement.

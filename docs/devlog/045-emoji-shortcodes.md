@@ -44,11 +44,10 @@ Validation run from repository root or explicit manifests:
 - `cargo clippy --manifest-path Cargo.toml --locked --all-targets`
 - `cargo clippy --manifest-path crates/egui_commonmark/Cargo.toml -p egui_commonmark_extended --lib --tests --locked`
 - locked root and vendored `cargo metadata`
-- `scripts/check-fork-publishable.sh`
 - root and renderer `cargo package --no-verify --list` notice checks
-- AUR `.SRCINFO`, shell syntax, release/Snap/Flatpak YAML parsing, `rustfmt`, and `git diff --check`
+- shell syntax, `rustfmt`, and `git diff --check`
 
-Known baseline warning: vendored `cargo check --workspace --all-targets` still fails because examples import upstream crate name `egui_commonmark` rather than renamed package `egui_commonmark_extended`; relevant library/tests and root targets pass. Full renderer package verification also cannot resolve fresh unpublished `egui_commonmark_backend_extended` 0.25.0 from crates.io; publishability check confirms all 0.25.0 fork crates are fresh and ready for ordered publication.
+Known baseline warning: vendored `cargo check --workspace --all-targets` still fails because examples import upstream crate name `egui_commonmark` rather than renamed package `egui_commonmark_extended`; relevant library/tests and root targets pass.
 
 ## Coding Style And Technique Rationale
 

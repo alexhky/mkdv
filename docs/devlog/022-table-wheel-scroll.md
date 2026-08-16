@@ -52,7 +52,7 @@ E2E recipe (mirrors the original bug-confirmation flow):
 ```bash
 # Xvfb already up
 setsid env DISPLAY=:99 WINIT_UNIX_BACKEND=x11 WAYLAND_DISPLAY= \
-  ./target/debug/md-viewer /tmp/wide-table-test.md </dev/null >/dev/null 2>&1 &
+  ./target/debug/mkdv /tmp/wide-table-test.md </dev/null >/dev/null 2>&1 &
 sleep 4
 WID=$(DISPLAY=:99 xdotool search --name "wide-table" | head -1)
 DISPLAY=:99 xdotool windowsize $WID 1280 800
@@ -74,10 +74,10 @@ for i in $(seq 1 80); do DISPLAY=:99 xdotool click 5; done
 # /tmp/postfix-8: page reached bottom (table at right edge, excess wheel passed through).
 ```
 
-All three scenarios pass on debug build. `cargo clippy --bin md-viewer -- -D warnings` clean. All 13 existing unit tests still pass.
+All three scenarios pass on debug build. `cargo clippy --bin mkdv -- -D warnings` clean. All 13 existing unit tests still pass.
 
 ## Future Improvements
 
 - **Priority 3 in `TARGET_METRICS.md`**: Resizable column dividers via `egui_extras::TableBuilder` swap. Separate, much larger initiative — requires re-implementing cell-content rendering through the TableBuilder row API, which doesn't directly support the recursive `self.event()` markdown-in-cell pattern.
-- **Touch trackpad pinch zoom** over a table: works at the egui context level, no change needed.
+- **Touch trackpad pinch zoom** over a table: routed through the viewer-only zoom path; the table remains inside the pannable viewer.
 - **Mobile/touch drag-to-scroll**: ScrollArea handles this natively; not affected by this PR.

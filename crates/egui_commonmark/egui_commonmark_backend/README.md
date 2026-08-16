@@ -1,9 +1,11 @@
-# A commonmark viewer for [egui](https://github.com/emilk/egui)
+# Backend for the extended CommonMark viewer
 
-[![Crate](https://img.shields.io/crates/v/egui_commonmark_backend.svg)](https://crates.io/crates/egui_commonmark_backend)
+[![Crate](https://img.shields.io/crates/v/egui_commonmark_backend_extended.svg)](https://crates.io/crates/egui_commonmark_backend_extended)
 
-This contains shared code between the crates `egui_commonmark` and `egui_commonmark_macros`.
-See [egui_commonmark](https://github.com/lampsitter/egui_commonmark) as a starting point.
+This contains shared code between `egui_commonmark_extended` and
+`egui_commonmark_macros_extended`. The fork originated from
+[egui_commonmark](https://github.com/lampsitter/egui_commonmark) and now also
+hosts mkdv's cache, typography, syntax, Mermaid, and math rendering support.
 
 ## License
 

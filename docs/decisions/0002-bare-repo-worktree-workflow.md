@@ -41,9 +41,9 @@ git stash pop
 
 Clone the repo multiple times:
 ```bash
-~/markdown-viewer-main/
-~/markdown-viewer-feature-x/
-~/markdown-viewer-feature-y/
+~/mkdv-main/
+~/mkdv-feature-x/
+~/mkdv-feature-y/
 ```
 
 **Pros:**
@@ -59,7 +59,7 @@ Clone the repo multiple times:
 
 Bare repository with worktrees for each branch:
 ```bash
-~/markdown-viewer/
+~/mkdv/
 ├── .bare/           # Git database
 └── worktrees/
     ├── main/

@@ -26,8 +26,8 @@ Drag-to-resize between columns is enabled via `.resizable(true)` on both Table a
 - [x] Inline-code wrap segmentation renders correctly across multiple cell rows (heterogeneous row heights via `cell_visual_lines` precomputation — E1 fix)
 - [x] Outer `ScrollArea::horizontal` restored around TableBuilder so wide tables exceeding viewport scroll instead of clipping (D3 fix)
 - [x] `cargo build` clean
-- [x] `cargo clippy --bin md-viewer -- -D warnings` clean
-- [x] `cargo test --bin md-viewer` passes (13/13)
+- [x] `cargo clippy --bin mkdv -- -D warnings` clean
+- [x] `cargo test --bin mkdv` passes (13/13)
 - [x] Visual verification on Xvfb: plain narrow, wide 10-column, inline-code paths, mixed inline markdown, HTML table, real-world `KEYBOARD_SHORTCUTS.md`
 
 ## Key Discoveries
@@ -89,7 +89,7 @@ TableBuilder draws its own column separators when `.resizable(true)` is set and 
 
 ### Public API changes
 
-None. The vendored egui_commonmark fork is consumed by `md-viewer` only, and the public `CommonMarkViewer` API is unchanged. Only internal renderer implementation moves from Grid to TableBuilder.
+None. The vendored egui_commonmark fork is consumed by `mkdv` only, and the public `CommonMarkViewer` API is unchanged. Only internal renderer implementation moves from Grid to TableBuilder.
 
 ### Function-level changes in `pulldown.rs`
 
@@ -131,7 +131,7 @@ Visual verification on Xvfb at `DISPLAY=:99`:
 A follow-up verification session attempted to exercise the full test matrix from `~/.claude/plans/implement-priority-3-from-zippy-raccoon.md` Section "Test matrix":
 
 - **A1 multi-tab switching** — partially passed: app loads `table-regression.md`, snapshot returned 233 AccessKit nodes including all expected widgets (tabs, file explorer, outline, search bar registrations). Clicking `File: test-inline.md` did not cleanly switch the visible content before the test session aborted.
-- **A2 explorer expand/collapse, A3 search-in-cell, B1-B4 keyboard shortcuts, C2-C5 multi-direction / multi-table drags, D2-D3 light mode + narrow window, E1-E3 LESSONS.md regression cases**: **NOT VERIFIED** during the follow-up session. Environmental instability — concurrent Claude sessions on the same host were periodically killing `md-viewer` processes and contending for port 9877 — caused the test app to die repeatedly mid-run. Xvfb itself stopped responding to `xdpyinfo` partway through. The verification harness needs a more isolated environment (its own Xvfb on a different display number, or a real desktop session).
+- **A2 explorer expand/collapse, A3 search-in-cell, B1-B4 keyboard shortcuts, C2-C5 multi-direction / multi-table drags, D2-D3 light mode + narrow window, E1-E3 LESSONS.md regression cases**: **NOT VERIFIED** during the follow-up session. Environmental instability — concurrent Claude sessions on the same host were periodically killing `mkdv` processes and contending for port 9877 — caused the test app to die repeatedly mid-run. Xvfb itself stopped responding to `xdpyinfo` partway through. The verification harness needs a more isolated environment (its own Xvfb on a different display number, or a real desktop session).
 
 ### Manual verification required on a real desktop session
 

@@ -1,14 +1,12 @@
-# md-viewer
+# mkdv
 
-[![Crates.io](https://img.shields.io/crates/v/md-viewer.svg)](https://crates.io/crates/md-viewer)
-[![AUR](https://img.shields.io/aur/version/md-viewer-git)](https://aur.archlinux.org/packages/md-viewer-git)
-[![Snap](https://img.shields.io/badge/snap-md--viewer-blue?logo=snapcraft)](https://snapcraft.io/md-viewer)
+[![Crates.io](https://img.shields.io/crates/v/mkdv.svg)](https://crates.io/crates/mkdv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/aydiler/md-viewer)](https://github.com/aydiler/md-viewer/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/aydiler/mkdv)](https://github.com/aydiler/mkdv/stargazers)
 
-A fast, lightweight markdown viewer for Linux built with Rust and egui. Designed for distraction-free reading with excellent typography, syntax highlighting, and LaTeX math — from quick notes to scientific papers.
+A fast, lightweight desktop Markdown viewer built with Rust and egui. Designed for distraction-free reading with excellent typography, syntax highlighting, and LaTeX math — from quick notes to scientific papers.
 
-![md-viewer rendering a LaTeX-heavy scientific paper](screenshots/math-rendering.png)
+![mkdv rendering a LaTeX-heavy scientific paper](screenshots/math-rendering.png)
 
 ## Features
 
@@ -36,7 +34,8 @@ A fast, lightweight markdown viewer for Linux built with Rust and egui. Designed
 
 ### View
 - **Dark & Light Themes** - Toggle with Ctrl+D
-- **Zoom** - 50% to 300% zoom (Ctrl++/-/0 or Ctrl+Scroll)
+- **Scaling & Viewer Zoom** - Ctrl++/-/0 changes whole-app scaling; touchpad pinch or Ctrl+Scroll zooms the Markdown viewer only (75%–300%). Pinch works on Wayland, where mkdv binds the compositor's gesture protocol directly because winit does not expose touchpad gestures on Linux; on X11 use Ctrl+Scroll. Two-axis touchpad scrolling and middle-drag panning keep the page moving naturally when zoomed in
+- **Fullscreen** - Double-click unused space in the top bar to enter or leave fullscreen; the View menu offers the same toggle
 - **Keyboard Scrolling** - Scroll documents with ↑/↓ by line or Page Up/Page Down by page when the find bar is closed
 - **Live Reload** - Auto-refresh on file changes (enabled by default)
 
@@ -44,8 +43,8 @@ A fast, lightweight markdown viewer for Linux built with Rust and egui. Designed
 - **Drag and Drop** - Drop markdown files onto the window to open
 - **Native Dialogs** - System file and folder picker integration
 - **Welcome Page & Recent Files** - Open files or folders from the idle screen and reopen recent documents
-- **Session Persistence** - Remembers open tabs, theme, zoom, and sidebar state
-- **Cross-Platform** - Works on X11 and Wayland
+- **Session Persistence** - Remembers open tabs, theme, app scaling, viewer zoom, and sidebar state
+- **Cross-Platform** - Linux, macOS, and Windows support; native X11 and Wayland support on Linux
 
 ## Screenshots
 
@@ -132,12 +131,17 @@ A fast, lightweight markdown viewer for Linux built with Rust and egui. Designed
 | Ctrl+D | Toggle dark/light mode |
 | Ctrl+Shift+E | Toggle file explorer |
 | Ctrl+Shift+O | Toggle outline sidebar |
-| Ctrl++ / Ctrl+= | Zoom in |
-| Ctrl+- | Zoom out |
-| Ctrl+0 | Reset zoom to 100% |
+| Ctrl++ / Ctrl+= | Increase whole-app scaling |
+| Ctrl+- | Decrease whole-app scaling |
+| Ctrl+0 | Reset whole-app scaling to 100% |
 | ↑ / ↓ (when find bar is closed) | Scroll document up/down by line |
 | Page Up / Page Down | Scroll document up/down by page |
-| Ctrl+Scroll | Zoom with mouse wheel |
+| Touchpad pinch over viewer | Zoom the Markdown viewer (Wayland only) |
+| Ctrl+Scroll over viewer | Zoom the Markdown viewer |
+| Middle-drag over viewer | Pan the zoomed viewer page |
+| Click the zoom/scale readout | Reset it to 100% |
+| Pinch / two-finger swipe in an opened image | Zoom / pan the image |
+| Mouse wheel in an opened image | Zoom the image |
 | Shift+Scroll over a wide table | Scroll the table horizontally |
 
 ### File Operations
@@ -149,66 +153,41 @@ A fast, lightweight markdown viewer for Linux built with Rust and egui. Designed
 
 ## Installation
 
-### Quick Install (Linux / macOS) — recommended
-
-Downloads the prebuilt binary for your platform, verifies its SHA256, and installs the binary to `~/.local/bin` plus bundled third-party notices under `~/.local/share/licenses/md-viewer`. No compilation, takes seconds.
+### Cargo (crates.io)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aydiler/md-viewer/main/scripts/install.sh | sh
+cargo install mkdv
 ```
 
-Supports Linux x86_64 and macOS arm64 (Apple Silicon). Set `INSTALL_DIR=/usr/local/bin` to install elsewhere. Intel Macs need to build from source via `cargo install md-viewer`.
+Cargo compiles the application locally and installs `mkdv` into Cargo's binary directory. Update it with `cargo install --force mkdv`.
 
-> **macOS Gatekeeper note:** binaries are not yet signed/notarized. If macOS refuses to run the app, run:
-> `xattr -d com.apple.quarantine ~/.local/bin/md-viewer`
-
-### Snap Store
+On Linux, register the executable with the GNOME application launcher:
 
 ```bash
-sudo snap install md-viewer
+mkdv --install-desktop
 ```
 
-Auto-updates via snapd.
-
-### Arch Linux (AUR)
-
-```bash
-yay -S md-viewer-git    # or: paru -S md-viewer-git
-```
-
-Builds from the latest `main` commit (rolling) — your system update grabs new versions automatically.
-
-### Flatpak / Flathub
-
-Once published to Flathub:
-
-```bash
-flatpak install flathub io.github.aydiler.md-viewer
-```
-
-(Flathub submission in progress — see `flatpak/` and `PUBLISHING.md`.)
-
-### Windows
-
-Download `md-viewer-<version>-windows-x86_64.zip` from the [latest release](https://github.com/aydiler/md-viewer/releases/latest), extract `md-viewer.exe`, and run it. Verify the included `.sha256` if you'd like.
-
-### Cargo (crates.io) — slower, builds from source
-
-```bash
-cargo install md-viewer
-```
-
-Compiles locally (~2–3 minutes). Update with `cargo install --force md-viewer`. Requires the system dependencies listed below.
+The application also refreshes this entry automatically whenever it starts. It writes `mkdv.desktop` to `$XDG_DATA_HOME/applications` (or `~/.local/share/applications`) and records the absolute installed executable path, so GNOME can launch it even when it does not inherit the shell's `PATH`. The launcher icon is installed alongside it, to `$XDG_DATA_HOME/icons/hicolor/scalable/apps/mkdv.svg`.
 
 ### From Source
 
 ```bash
-git clone https://github.com/aydiler/md-viewer
-cd md-viewer
-cargo build --release
-make install     # installs to ~/.local/bin (optional)
-make uninstall   # removes the local installation
+git clone https://github.com/aydiler/mkdv
+cd mkdv
+cargo install --path .
+mkdv --install-desktop   # Linux/GNOME only
 ```
+
+`cargo install --path .` uses Cargo's full release profile and may take several
+minutes on a clean checkout. For repeated local development, use the faster
+optimized profile instead:
+
+```bash
+cargo install --offline --locked --profile release-dev --path .
+```
+
+For the quickest edit/test loop, run `cargo check --offline` followed by
+`cargo test --offline`; keep `target/` so Cargo can reuse compiled dependencies.
 
 ### System Dependencies (Arch Linux)
 
@@ -226,26 +205,26 @@ sudo pacman -S --needed \
 
 ```bash
 # Open a file and return the terminal prompt (live reload is enabled by default)
-md-viewer README.md
+mkdv README.md
 
 # Keep the viewer attached to the terminal for debugging/logs
-md-viewer --foreground README.md
+mkdv --foreground README.md
 
 # Disable live reload
-md-viewer README.md --no-watch
+mkdv README.md --no-watch
 ```
 
-Run `md-viewer` with no file to start on the welcome page, then choose Open File, Open Folder, or a recent document. In the app, use File → Open File… or Ctrl+O to open a document, and File → Open Folder… to choose the file explorer root.
+Run `mkdv` with no file to start on the welcome page, then choose Open File, Open Folder, or a recent document. In the app, use File → Open File… or Ctrl+O to open a document, and File → Open Folder… to choose the file explorer root.
 
-When launched from a terminal, `md-viewer` detaches by default so the shell prompt is available while the window stays open. Use `--foreground` when you want terminal logs or blocking process behavior.
+When launched from a terminal, `mkdv` detaches by default so the shell prompt is available while the window stays open. Use `--foreground` when you want terminal logs or blocking process behavior.
 
 ## Technical Details
 
-- **Binary size**: ~35 MB (includes syntax highlighting, mermaid renderer, math rendering, image support, X11+Wayland). ~7 MB as snap.
+- **Binary size**: ~35 MB (includes syntax highlighting, mermaid renderer, math rendering, image support, X11+Wayland).
 - **Startup time**: < 200ms
 - **Rendering**: 60 FPS with viewport-based clipping
 - **Memory**: Uses mimalloc for improved allocation performance
-- **Platform**: Linux (X11 and Wayland via glow backend)
+- **Platforms**: Linux x86_64 (X11 and Wayland), macOS arm64, and Windows x86_64 via the glow backend
 
 ### Built With
 

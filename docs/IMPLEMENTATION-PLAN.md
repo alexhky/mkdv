@@ -2,6 +2,13 @@
 
 This document provides a detailed implementation plan for adding markdown file link support to the markdown viewer, progressing through four phases of increasing complexity.
 
+> **Status: historical design document.** The current application shipped Phase
+> D link navigation and a custom version of Phase B's tab system. The Phase A
+> multi-window prototype was superseded, and Phase C is not implemented. The
+> examples and unchecked checklists below preserve the original design process;
+> use `docs/ARCHITECTURE.md`, `docs/KEYBOARD_SHORTCUTS.md`, and `src/main.rs` as
+> the authoritative description of current behavior.
+
 ## Table of Contents
 
 1. [Phase D: Simple Link Handler](#phase-d-simple-link-handler)
@@ -405,7 +412,7 @@ struct MarkdownApp {
 
     /// Settings shared across windows
     dark_mode: bool,
-    zoom_level: f32,
+    scaling: f32,
     show_outline: bool,
 }
 ```
@@ -459,7 +466,7 @@ impl eframe::App for MarkdownApp {
         // Render child windows
         // Note: We need to collect data first to avoid borrow issues
         let dark_mode = self.dark_mode;
-        let zoom_level = self.zoom_level;
+        let scaling = self.scaling;
         let show_outline = self.show_outline;
 
         // Use indices to avoid borrow checker issues
@@ -486,7 +493,7 @@ impl eframe::App for MarkdownApp {
                     } else {
                         egui::Visuals::light()
                     });
-                    ctx.set_zoom_factor(zoom_level);
+                    ctx.set_zoom_factor(scaling);
 
                     // Render content
                     Self::render_child_window_content(ctx, window, show_outline);
@@ -648,7 +655,7 @@ struct MarkdownApp {
 
     /// Global settings (shared across tabs)
     dark_mode: bool,
-    zoom_level: f32,
+    scaling: f32,
     show_outline: bool,
     watch_enabled: bool,
 
@@ -800,7 +807,7 @@ impl eframe::App for MarkdownApp {
         } else {
             egui::Visuals::light()
         });
-        ctx.set_zoom_factor(self.zoom_level);
+        ctx.set_zoom_factor(self.scaling);
 
         // Update window title based on active tab
         if let Some(tab) = self.tabs.get(self.active_tab) {
@@ -1037,7 +1044,7 @@ struct MarkdownApp {
 
     /// Global settings
     dark_mode: bool,
-    zoom_level: f32,
+    scaling: f32,
     show_outline: bool,
 }
 ```

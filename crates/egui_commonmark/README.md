@@ -1,25 +1,28 @@
-# A commonmark viewer for [egui](https://github.com/emilk/egui)
+# An extended CommonMark viewer for [egui](https://github.com/emilk/egui)
 
-[![Crate](https://img.shields.io/crates/v/egui_commonmark.svg)](https://crates.io/crates/egui_commonmark)
-[![Documentation](https://docs.rs/egui_commonmark/badge.svg)](https://docs.rs/egui_commonmark)
+[![Crate](https://img.shields.io/crates/v/egui_commonmark_extended.svg)](https://crates.io/crates/egui_commonmark_extended)
+[![Documentation](https://docs.rs/egui_commonmark_extended/badge.svg)](https://docs.rs/egui_commonmark_extended)
 
 <img src="https://raw.githubusercontent.com/lampsitter/egui_commonmark/master/assets/example-v4.png" alt="showcase" width=280/>
 
-While this crate's main focus is commonmark, it also supports a subset of
-Github's markdown syntax: tables, strikethrough, tasklists and footnotes.
+This is mkdv's vendored fork of `egui_commonmark`, published as
+`egui_commonmark_extended` 0.25. In addition to CommonMark and GitHub-flavored
+Markdown, the fork contains typography controls, search highlighting,
+heading-position tracking, emoji shortcodes, resizable tables, Mermaid, and
+Typst-backed math rendering.
 
 ## Usage
 
 In Cargo.toml:
 
 ```toml
-egui_commonmark = "0.22"
+egui_commonmark_extended = "0.25"
 # Specify what image formats you want to use
 image = { version = "0.25", default-features = false, features = ["png"] }
 ```
 
 ```rust
-use egui_commonmark::*;
+use egui_commonmark_extended::*;
 let markdown =
 r"# Hello world
 
@@ -40,7 +43,7 @@ This will do the parsing of the markdown at compile time and output egui widgets
 ### Example
 
 ```rust
-use egui_commonmark::{CommonMarkCache, commonmark};
+use egui_commonmark_extended::{commonmark, CommonMarkCache};
 let mut cache = CommonMarkCache::default();
 let _response = commonmark!(ui, &mut cache, "# ATX Heading Level 1");
 ```
@@ -50,7 +53,7 @@ Alternatively you can embed a file
 ### Example
 
 ```rust
-use egui_commonmark::{CommonMarkCache, commonmark_str};
+use egui_commonmark_extended::{commonmark_str, CommonMarkCache};
 let mut cache = CommonMarkCache::default();
 commonmark_str!(ui, &mut cache, "content.md");
 ```
@@ -63,13 +66,16 @@ commonmark_str!(ui, &mut cache, "content.md");
   [`syntect`](https://crates.io/crates/syntect)
 * `svg`: Support for viewing svg images
 * `fetch`: Images with urls will be downloaded and displayed
-* `embedded_image`: Load base64 image data urls from within markdown files
+* `embedded_image`: Load base64 image data URLs from within Markdown files
+* `mermaid`: Render Mermaid code blocks through merman/resvg
+* `math`: Render LaTeX math through mitex and Typst
+* `svg_text`: Enable system-font text rendering in SVG images
 
 
 ## Examples
 
-For an easy intro check out the `hello_world` example. To see all the different
-features egui_commonmark has to offer check out the `book` example.
+For an easy intro check out the `hello_world` example. To see the extended
+renderer features together, check out the `book` example.
 
 ## FAQ
 

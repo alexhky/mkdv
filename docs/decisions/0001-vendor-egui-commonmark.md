@@ -6,7 +6,7 @@
 
 ## Context
 
-The markdown-viewer app needed custom typography support (configurable line height, font sizes) that egui_commonmark doesn't expose. We needed to modify the library to wire up egui's existing `TextFormat.line_height` capability.
+The mkdv app needed custom typography support (configurable line height, font sizes) that egui_commonmark doesn't expose. We needed to modify the library to wire up egui's existing `TextFormat.line_height` capability.
 
 ## Decision Drivers
 

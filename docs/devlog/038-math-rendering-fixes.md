@@ -15,7 +15,7 @@ Two independent failure classes:
 
 ### Class 1 — hard render failures (16 spans → error boxes)
 
-md-viewer renders math by converting LaTeX → Typst with `mitex`, then compiling with a
+mkdv renders math by converting LaTeX → Typst with `mitex`, then compiling with a
 hand-written `MITEX_PREAMBLE` (`egui_commonmark_backend/src/misc.rs`) that defines the
 helper functions mitex's output references. Four commands the doc uses are emitted by
 mitex as calls/identifiers the preamble never defined, so typst aborts with

@@ -1,13 +1,13 @@
 [package]
-name = "md-viewer"
+name = "mkdv"
 version = "0.1.15"
 edition = "2021"
 rust-version = "1.80"
 description = "Fast, lightweight markdown viewer for Linux with tabs, file explorer, and live reload"
 license = "MIT"
-repository = "https://github.com/aydiler/md-viewer"
-homepage = "https://github.com/aydiler/md-viewer"
-documentation = "https://github.com/aydiler/md-viewer#readme"
+repository = "https://github.com/aydiler/mkdv"
+homepage = "https://github.com/aydiler/mkdv"
+documentation = "https://github.com/aydiler/mkdv#readme"
 readme = "README.md"
 keywords = ["markdown", "viewer", "egui", "linux", "desktop"]
 categories = ["command-line-utilities", "gui", "visualization"]
@@ -64,6 +64,17 @@ serde = { version = "1", features = ["derive"] }
 env_logger = "0.11"
 log = "0.4"
 regex = "1.12.2"
+
+# Needed to reach the windowing backend's display for pinch support.
+raw-window-handle = "0.6"
+
+# Touchpad pinch-to-zoom. winit ships no gesture backend for Linux, so the
+# `zwp_pointer_gestures_v1` protocol is bound directly on winit's own Wayland
+# connection. See `src/pinch.rs`.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 
 [features]
 default = []

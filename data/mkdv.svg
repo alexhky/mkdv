@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f6b8c"/>
+      <stop offset="1" stop-color="#15303f"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbb95c"/>
+      <stop offset="1" stop-color="#e5913a"/>
+    </linearGradient>
+    <linearGradient id="barrel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5a6779"/>
+      <stop offset="0.35" stop-color="#333c49"/>
+      <stop offset="1" stop-color="#222932"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#d3f4ff"/>
+      <stop offset="0.5" stop-color="#5cc4e8"/>
+      <stop offset="1" stop-color="#1c5f83"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- ears -->
+  <g fill="url(#fur)">
+    <path d="M58 34 L110 82 L62 110 Z"/>
+    <path d="M198 34 L146 82 L194 110 Z"/>
+  </g>
+  <g fill="#e8746e">
+    <path d="M70 54 L98 80 L72 94 Z"/>
+    <path d="M186 54 L158 80 L184 94 Z"/>
+  </g>
+
+  <!-- head -->
+  <ellipse cx="128" cy="148" rx="84" ry="70" fill="url(#fur)"/>
+
+  <!-- tabby stripes -->
+  <g stroke="#c47a2c" stroke-width="7" stroke-linecap="round" opacity="0.75">
+    <path d="M110 96 L104 112"/>
+    <path d="M128 92 L128 110"/>
+    <path d="M146 96 L152 112"/>
+  </g>
+
+  <!-- whiskers -->
+  <g stroke="#f7e2c4" stroke-width="4" stroke-linecap="round" opacity="0.9">
+    <path d="M40 194 L74 198"/>
+    <path d="M44 212 L78 208"/>
+    <path d="M216 194 L182 198"/>
+    <path d="M212 212 L178 208"/>
+  </g>
+
+  <!-- muzzle -->
+  <path d="M128 200 L118 192 L138 192 Z" fill="#e8746e"/>
+  <g stroke="#b5651f" stroke-width="4" stroke-linecap="round" fill="none">
+    <path d="M128 200 L128 206"/>
+    <path d="M128 206 Q118 214 110 206"/>
+    <path d="M128 206 Q138 214 146 206"/>
+  </g>
+
+  <!-- binoculars -->
+  <g>
+    <!-- bridge and focus wheel -->
+    <rect x="110" y="122" width="36" height="54" rx="10" fill="#39434f"/>
+    <rect x="116" y="104" width="24" height="46" rx="11" fill="#5c6a7d"/>
+    <g stroke="#2c3440" stroke-width="3" stroke-linecap="round">
+      <path d="M119 114 L137 114"/>
+      <path d="M119 124 L137 124"/>
+      <path d="M119 134 L137 134"/>
+    </g>
+    <!-- barrels -->
+    <rect x="44" y="110" width="70" height="86" rx="34" fill="url(#barrel)"/>
+    <rect x="142" y="110" width="70" height="86" rx="34" fill="url(#barrel)"/>
+    <!-- eyecup / prism housing seam -->
+    <g fill="#4d5a6b">
+      <rect x="48" y="112" width="62" height="20" rx="10"/>
+      <rect x="146" y="112" width="62" height="20" rx="10"/>
+    </g>
+    <!-- objective lenses -->
+    <circle cx="79" cy="163" r="26" fill="#59677a"/>
+    <circle cx="177" cy="163" r="26" fill="#59677a"/>
+    <circle cx="79" cy="163" r="19" fill="url(#lens)"/>
+    <circle cx="177" cy="163" r="19" fill="url(#lens)"/>
+    <circle cx="72" cy="156" r="6" fill="#ffffff" opacity="0.85"/>
+    <circle cx="170" cy="156" r="6" fill="#ffffff" opacity="0.85"/>
+  </g>
+
+</svg>

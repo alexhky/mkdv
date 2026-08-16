@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish vendored fork crates (in dep order) then md-viewer to crates.io.
+# Publish vendored fork crates (in dep order) then mkdv to crates.io.
 #
 # Idempotent: if a version is already on the registry, cargo emits "already
 # uploaded" — we treat that as success so re-tagging the same release doesn't
 # fail the job.
 #
-# Invoked from .github/workflows/release.yml `publish-crates` job. Requires
-# CARGO_REGISTRY_TOKEN in the environment.
+# Run from the repository before publishing. Requires CARGO_REGISTRY_TOKEN in
+# the environment.
 
 if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
     echo "error: CARGO_REGISTRY_TOKEN not set" >&2
@@ -19,7 +19,7 @@ publish_dir() {
     local dir="$1"
     local label
     if [ "$dir" = "." ]; then
-        label="md-viewer"
+        label="mkdv"
     else
         label=$(basename "$dir")
     fi

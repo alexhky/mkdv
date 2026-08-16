@@ -18,7 +18,7 @@ This fix is three crash-fix changes (Fix B, Fix C, Fix A), one scroll-perf chang
 
 ### Bug 2: math-feature parser-options mismatch
 
-`show()` parses events with `parser_options_math(options.math_fn.is_some() || cfg!(feature = "math"))` (parsers/pulldown.rs:461). `show_scrollable()` parses with `parser_options_math(options.math_fn.is_some())` (parsers/pulldown.rs:565). md-viewer enables the `math` cargo feature, so the two parses produced *different* event streams for any document containing `$…$` patterns (currency, env-var interpolation, regex). Split-points were registered with indices into `cache.cached_events` (with-math) but consumed against `sc.events` (without-math) by the viewport-skip path. The two indices diverged on real docs; iteration jumped to an unrelated event — often `Tag::Item` with no matching `Tag::List` start — and panicked exactly the same way.
+`show()` parses events with `parser_options_math(options.math_fn.is_some() || cfg!(feature = "math"))` (parsers/pulldown.rs:461). `show_scrollable()` parses with `parser_options_math(options.math_fn.is_some())` (parsers/pulldown.rs:565). mkdv enables the `math` cargo feature, so the two parses produced *different* event streams for any document containing `$…$` patterns (currency, env-var interpolation, regex). Split-points were registered with indices into `cache.cached_events` (with-math) but consumed against `sc.events` (without-math) by the viewport-skip path. The two indices diverged on real docs; iteration jumped to an unrelated event — often `Tag::Item` with no matching `Tag::List` start — and panicked exactly the same way.
 
 ### Bug 3: `is_block_end_tag` allowed mid-container split-points
 
@@ -82,7 +82,7 @@ The full `Arc<Vec<…>>` refactor (originally proposed P1a) would have required 
 
 **Scroll perf:** Fix P1a is the dominant scroll-perf win. 1565 µs/frame is ~9.4 % of the 60 fps frame budget — exactly the "scroll feels sluggish" complaint. 8 µs is ~0.05 %, essentially free.
 
-The crash repro on Recent-Changes.md is reliable: launch → focus the window → resize (forces a fresh bootstrap with a different layout signature) → ~500 wheel-down events. Pre-fix: panic within ~10 seconds of scrolling. Post-fix: scroll cycles 500 down + 500 up + resize cycle + 300 more scrolls without panic, and `coredumpctl list md-viewer` shows no new entries.
+The crash repro on Recent-Changes.md is reliable: launch → focus the window → resize (forces a fresh bootstrap with a different layout signature) → ~500 wheel-down events. Pre-fix: panic within ~10 seconds of scrolling. Post-fix: scroll cycles 500 down + 500 up + resize cycle + 300 more scrolls without panic, and `coredumpctl list mkdv` shows no new entries.
 
 ## Testing
 

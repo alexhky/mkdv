@@ -3,7 +3,7 @@
 **Status:** Implemented; validation recorded
 **Branch:** `feature/issue-29-keyboard-scroll`
 **Date:** 2026-06-03
-**Issue:** aydiler/md-viewer#29
+**Issue:** aydiler/mkdv#29
 
 ## Summary
 
@@ -32,19 +32,19 @@ The shortcut handling is intentionally gated by UI state and modifiers: the find
 
 Fresh closeout validation on 2026-06-03:
 
-- `cargo fmt --check --manifest-path /home/akiro/Coding/md-viewer-keyboard-scroll/Cargo.toml` — PASS no output.
-- `git -C /home/akiro/Coding/md-viewer-keyboard-scroll diff --check` — PASS no output.
-- `cargo test --manifest-path /home/akiro/Coding/md-viewer-keyboard-scroll/Cargo.toml` — PASS 19 passed; pre-existing vendored warnings observed.
-- `cargo clippy --manifest-path /home/akiro/Coding/md-viewer-keyboard-scroll/Cargo.toml --all-targets --all-features` — PASS; pre-existing vendored warnings observed.
-- `cargo build --manifest-path /home/akiro/Coding/md-viewer-keyboard-scroll/Cargo.toml` — PASS; pre-existing vendored warnings observed.
+- `cargo fmt --check --manifest-path /home/akiro/Coding/mkdv-keyboard-scroll/Cargo.toml` — PASS no output.
+- `git -C /home/akiro/Coding/mkdv-keyboard-scroll diff --check` — PASS no output.
+- `cargo test --manifest-path /home/akiro/Coding/mkdv-keyboard-scroll/Cargo.toml` — PASS 19 passed; pre-existing vendored warnings observed.
+- `cargo clippy --manifest-path /home/akiro/Coding/mkdv-keyboard-scroll/Cargo.toml --all-targets --all-features` — PASS; pre-existing vendored warnings observed.
+- `cargo build --manifest-path /home/akiro/Coding/mkdv-keyboard-scroll/Cargo.toml` — PASS; pre-existing vendored warnings observed.
 
 Earlier targeted validation from Task 2 review:
 
-- `cargo test --manifest-path "/home/akiro/Coding/md-viewer-keyboard-scroll/Cargo.toml" keyboard_scroll_target -- --nocapture` — PASS 4 passed.
+- `cargo test --manifest-path "/home/akiro/Coding/mkdv-keyboard-scroll/Cargo.toml" keyboard_scroll_target -- --nocapture` — PASS 4 passed.
 
 Manual UI validation on 2026-06-04:
 
-- Launched `/home/akiro/Coding/md-viewer-keyboard-scroll/target/debug/md-viewer /home/akiro/Coding/md-viewer-keyboard-scroll/docs/LESSONS.md` from this session; process exited cleanly after user closed it.
+- Launched `/home/akiro/Coding/mkdv-keyboard-scroll/target/debug/mkdv /home/akiro/Coding/mkdv-keyboard-scroll/docs/LESSONS.md` from this session; process exited cleanly after user closed it.
 - User confirmed keyboard scrolling behavior: "perfect, works great."
 
 ## Files Updated In This Docs Task

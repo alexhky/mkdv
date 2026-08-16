@@ -27,7 +27,7 @@ Pre-`21d43c5` (virtualization enabled), `active_search_y` only got recorded when
 `/tmp/search-repro.md` — 3 sections with `findme` on each page.
 
 ```bash
-md-viewer /tmp/search-repro.md
+mkdv /tmp/search-repro.md
 # Ctrl+F → findme → try to wheel-scroll past page 1
 ```
 

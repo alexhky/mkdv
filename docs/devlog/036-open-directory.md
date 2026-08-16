@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Branch:** `feature/open-directory`
 **Date:** 2026-06-08
-**Issue:** aydiler/md-viewer#28
+**Issue:** aydiler/mkdv#28
 
 ## Summary
 
@@ -42,7 +42,7 @@ separately.
 ## Testing Notes
 
 - `cargo build` — clean.
-- `cargo clippy --bin md-viewer` — only the two pre-existing vendored warnings
+- `cargo clippy --bin mkdv` — only the two pre-existing vendored warnings
   (`unused variable: max_width`, deprecated `allocate_ui_at_rect`); no new ones.
 - Live (Xvfb `:99`): File → **Open Folder…** is present and correctly placed
   (right after "New Tab…") — confirmed by screenshot. Clicking it invokes the

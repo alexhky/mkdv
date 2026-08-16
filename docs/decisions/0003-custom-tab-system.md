@@ -6,7 +6,7 @@
 
 ## Context
 
-The markdown-viewer needed multi-document support. Users should be able to open multiple markdown files and switch between them. The question was whether to use an existing docking/tab library or build a simple custom solution.
+The mkdv needed multi-document support. Users should be able to open multiple markdown files and switch between them. The question was whether to use an existing docking/tab library or build a simple custom solution.
 
 ## Decision Drivers
 
