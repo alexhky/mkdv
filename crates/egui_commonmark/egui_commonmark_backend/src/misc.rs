@@ -850,11 +850,16 @@ impl CodeBlock {
     /// font-family on the root `<svg>` element for text that lacks one
     /// (e.g. sequence diagram labels).
     fn sanitize_svg_font_family(svg: &str) -> String {
-        // DejaVu Sans first — it has the widest Unicode coverage (including →, ←, etc.)
-        // which prevents resvg from falling back to a monospace/bold font for missing glyphs.
-        let safe_attr = "DejaVu Sans, Noto Sans, Liberation Sans";
+        // Ordered by metric compatibility with the font merman laid the diagram out
+        // with, which is what keeps labels inside the shapes sized for them. merman
+        // measures against vendored Trebuchet MS tables; Liberation Sans, Arial and
+        // Helvetica land within ~3% of those on real label text, so they go first.
+        // DejaVu Sans and Noto Sans are wider and would push text past the node
+        // border, but they stay in the list as coverage/availability fallbacks.
+        let safe_attr = "Trebuchet MS, Liberation Sans, Arial, Helvetica, DejaVu Sans, Noto Sans";
         // Use single quotes — double quotes would break style="..." XML attributes
-        let safe_css = "'DejaVu Sans', 'Noto Sans', 'Liberation Sans', sans-serif";
+        let safe_css = "'Trebuchet MS', 'Liberation Sans', Arial, Helvetica, \
+                        'DejaVu Sans', 'Noto Sans', sans-serif";
 
         let mut result = String::with_capacity(svg.len());
         let mut remaining = svg;
@@ -1759,15 +1764,14 @@ impl Default for CommonMarkCache {
             mermaid_tx,
             #[cfg(feature = "mermaid")]
             mermaid_rx,
+            // Deliberately no `with_text_measurer` override: `HeadlessRenderer::new()`
+            // already defaults to `VendoredFontMetricsTextMeasurer`, which measures per
+            // glyph from vendored font tables. A `DeterministicTextMeasurer` charges
+            // every glyph the same width, so its factor has to cover the widest one —
+            // at the 0.65 we used to pass it, labels measured ~33% wider than they
+            // render. See `sanitize_svg_font_family` for the matching font stack.
             #[cfg(feature = "mermaid")]
-            mermaid_renderer: merman::render::HeadlessRenderer::new()
-                .with_text_measurer(Arc::new(merman::render::DeterministicTextMeasurer {
-                    // Wider than default (0.55) to accommodate Noto Sans/DejaVu Sans
-                    // which are wider than the vendored Trebuchet MS metrics.
-                    // 0.65 prevents text overlap in complex flowcharts with long labels.
-                    char_width_factor: 0.65,
-                    line_height_factor: 0.0, // use internal default
-                })),
+            mermaid_renderer: merman::render::HeadlessRenderer::new(),
             #[cfg(feature = "mermaid")]
             clicked_mermaid: None,
             clicked_image: None,
@@ -2075,8 +2079,11 @@ mod mermaid_tests {
             r#"font-size: 16px; font-family: &quot;trebuchet ms&quot;,verdana,arial,sans-serif;">Hi</text></svg>"#
         );
         let out = CodeBlock::sanitize_svg_font_family(svg);
-        assert!(!out.contains("trebuchet"), "old font value survived: {out}");
+        // The replacement stack names Trebuchet MS itself, so assert on the parts of
+        // the original declaration that cannot appear in it.
         assert!(!out.contains("verdana"), "old font value survived: {out}");
+        assert!(!out.contains("&quot;"), "old font value survived: {out}");
+        assert!(out.contains("'Liberation Sans'"));
         assert!(out.contains("'DejaVu Sans'"));
         assert!(out.contains(">Hi</text>"), "markup was corrupted: {out}");
     }
@@ -2084,9 +2091,10 @@ mod mermaid_tests {
     #[test]
     fn sanitizes_font_family_attribute_form() {
         let svg =
-            r#"<svg xmlns="http://www.w3.org/2000/svg"><text font-family="Arial">Hi</text></svg>"#;
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text font-family="Courier New">Hi</text></svg>"#;
         let out = CodeBlock::sanitize_svg_font_family(svg);
-        assert!(!out.contains("Arial"));
+        assert!(!out.contains("Courier New"));
+        assert!(out.contains("Liberation Sans"));
         assert!(out.contains("DejaVu Sans"));
         assert!(out.contains(">Hi</text>"));
     }

@@ -161,10 +161,9 @@ Format only the root workspace; edit the vendored crate by hand.
 
 ## Future Improvements
 
-- [ ] Re-tune `char_width_factor` (currently 0.65). It was raised from merman's
-      default 0.55 to stop text overlapping in 0.3. Now that 0.7 wraps using the
-      same measurer, the value mostly controls how much padding a node gets —
-      rendered nodes currently look slightly wider than the text needs.
+- [x] Re-tune `char_width_factor` — done in
+      [052](052-mermaid-text-measurement.md), which dropped the measurer override
+      entirely rather than picking a new value.
 - [ ] merman 0.7 adds `eventmodeling`, `ishikawa`, `tree_view` and `venn`
       diagram types plus a `theme` module. None are wired up; `theme` in
       particular could replace `sanitize_svg_font_family()` if it allows setting

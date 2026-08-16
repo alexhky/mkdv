@@ -489,6 +489,34 @@ cover it.
 
 ---
 
+### A tuned constant can be hiding a better code path
+**Symptom:** mermaid nodes rendered noticeably wider than their labels needed.
+The suspect was `char_width_factor: 0.65`, passed to merman's
+`DeterministicTextMeasurer`, and the obvious task was to re-tune it.
+
+**Root cause:** no value of that constant is good. It charges every glyph the
+same width, so it has to cover the widest one — `illlliii` was over-measured
+2.5× while `MMMMMMMM` was under-measured. Worse, passing the measurer at all
+was the bug: `HeadlessRenderer::new()` already defaults to
+`VendoredFontMetricsTextMeasurer`, which has real per-glyph advance tables. Our
+override replaced a good measurer with a placeholder one.
+
+**Fix:** delete the override. Layout metrics only pay off if the SVG is rendered
+in a font with the metrics it was laid out against, so the font stack we
+substitute now leads with Arial-metric families (Liberation Sans, Arial,
+Helvetica) that match merman's vendored Trebuchet MS tables within ~3%, with
+DejaVu Sans and Noto Sans kept at the back for coverage.
+
+**Lesson:** before tuning a magic number, check what the library does when you
+do not pass it. A constant that has been nudged over time is a sign someone is
+compensating for the wrong code path, and measuring the alternatives — here,
+real advance widths via `ttf-parser` — decides it in minutes.
+
+**Files:** `crates/egui_commonmark/egui_commonmark_backend/src/misc.rs`,
+`docs/devlog/052-mermaid-text-measurement.md`
+
+---
+
 ## Typography Research
 
 ### WCAG 2.1 SC 1.4.12 line height requirement
