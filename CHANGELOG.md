@@ -17,6 +17,11 @@ All notable changes to mkdv will be documented in this file.
   connection. X11 has no gesture protocol and continues to use Ctrl+Scroll.
 - Viewer zoom snaps to a 2% ladder so a pinch replays cached layout and glyph
   levels instead of re-wrapping and re-rasterizing at every intermediate value.
+- Clicking the scale or viewer-zoom readout in the top bar resets it to 100%,
+  as does clicking the zoom percentage over an opened image.
+- Opened images follow the same gesture split as the viewer: a mouse wheel
+  zooms, a touchpad two-finger swipe pans, and pinch zooms. Wheel unit (`Line`
+  vs `Point`) is what distinguishes a mouse from a touchpad.
 
 ### Bug Fixes
 

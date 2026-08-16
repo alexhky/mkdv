@@ -53,4 +53,7 @@ The find bar also has on-screen `↑` and `↓` buttons next to the match count 
 | Touchpad pinch over viewer | Zoom the Markdown viewer, 75%–300% (Wayland only) |
 | Ctrl+Scroll over viewer | Zoom the Markdown viewer |
 | Middle-drag over viewer | Pan the zoomed viewer page |
+| Click the zoom/scale readout | Reset it to 100% |
+| Pinch / two-finger swipe in an opened image | Zoom / pan the image |
+| Mouse wheel in an opened image | Zoom the image |
 | Shift+Scroll over a wide table | Scroll the table horizontally |

@@ -176,6 +176,26 @@ fn quantize_viewer_zoom(zoom: f32) -> f32 {
         .clamp(MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM)
 }
 
+/// Draw a small zoom/scaling percentage readout that resets on click.
+///
+/// It stays visually a status label — it only picks up a hover highlight and a
+/// pointing cursor — so the top bar does not gain another button-looking
+/// control for something that is usually just information.
+fn zoom_readout(ui: &mut egui::Ui, text: &str, hover: &str) -> egui::Response {
+    let response = ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .small()
+                .color(ui.visuals().weak_text_color()),
+        )
+        .sense(egui::Sense::click()),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.on_hover_text(hover)
+}
+
 /// Resolve the viewer scroll speed once, honoring the `MKDV_SCROLL_SPEED`
 /// override. Values outside a sane range fall back to the default.
 fn viewer_scroll_speed() -> f32 {
@@ -1731,9 +1751,13 @@ struct MarkdownApp {
     open_tab_paths: HashSet<PathBuf>,
     // Lightbox overlay for enlarged mermaid diagrams
     lightbox: Option<LightboxState>,
-    // Scroll delta captured from raw_input_hook for lightbox zoom (stripped from RawInput)
-    lightbox_scroll: f32,
-    /// Multiplicative viewer zoom collected from raw native gesture events.
+    /// Mouse-wheel notches captured for lightbox zoom (stripped from RawInput).
+    /// Line-unit only: a wheel notch zooms, a touchpad swipe does not.
+    lightbox_wheel_notches: f32,
+    /// Point-unit (touchpad) two-finger movement captured for lightbox panning.
+    lightbox_pan: egui::Vec2,
+    /// Multiplicative zoom collected from raw native gesture events. Consumed
+    /// by the lightbox while it is open, by the Markdown viewer otherwise.
     /// This is reset at the beginning of every input pass.
     pending_viewer_zoom: f32,
     /// Touchpad pinch, sourced outside winit (see `pinch`).
@@ -1920,7 +1944,8 @@ impl MarkdownApp {
             title_dirty: true,
             open_tab_paths: HashSet::new(),
             lightbox: None,
-            lightbox_scroll: 0.0,
+            lightbox_wheel_notches: 0.0,
+            lightbox_pan: egui::Vec2::ZERO,
             pending_viewer_zoom: 1.0,
             pinch,
             lightbox_open_count: 0,
@@ -3878,12 +3903,16 @@ impl MarkdownApp {
                 }
             });
 
-        // 3. Apply scroll-wheel zoom (proportional to scroll amount for smooth feel)
+        // 3. Apply zoom from a mouse wheel and from pinch / Ctrl+wheel.
+        // A touchpad swipe is deliberately excluded here — it pans below.
         let old_zoom = lightbox.zoom;
-        if self.lightbox_scroll != 0.0 {
+        let mut zoom_factor = sane_zoom_factor(self.pending_viewer_zoom);
+        if self.lightbox_wheel_notches != 0.0 {
             // ~10% per scroll notch, smooth with proportional delta
-            let factor = (1.0_f32 + self.lightbox_scroll * 0.08).clamp(0.5, 2.0);
-            lightbox.zoom = (lightbox.zoom * factor).clamp(0.1, 10.0);
+            zoom_factor *= (1.0_f32 + self.lightbox_wheel_notches * 0.08).clamp(0.5, 2.0);
+        }
+        if (zoom_factor - 1.0).abs() > f32::EPSILON {
+            lightbox.zoom = (lightbox.zoom * zoom_factor).clamp(0.1, 10.0);
         }
         let zoom_changed = (lightbox.zoom - old_zoom).abs() > f32::EPSILON;
 
@@ -3945,7 +3974,31 @@ impl MarkdownApp {
             None
         };
 
-        if let Some(offset) = pre_offset {
+        // Two-finger touchpad movement pans the image. Wheel events are
+        // stripped from RawInput while the lightbox is open, so the ScrollArea
+        // never sees them and the offset has to be driven explicitly.
+        let forced_offset = if self.lightbox_pan == egui::Vec2::ZERO {
+            pre_offset
+        } else {
+            let base = pre_offset.unwrap_or(lightbox.scroll_offset);
+            let content = egui::vec2(
+                display_size.x.max(area_size.x),
+                display_size.y.max(area_size.y),
+            );
+            let max_offset = egui::vec2(
+                (content.x - area_size.x).max(0.0),
+                (content.y - area_size.y).max(0.0),
+            );
+            // Same pacing as the document viewer, so a swipe covers a
+            // comparable distance in both.
+            let step = self.lightbox_pan * viewer_scroll_speed();
+            Some(egui::vec2(
+                (base.x - step.x).clamp(0.0, max_offset.x),
+                (base.y - step.y).clamp(0.0, max_offset.y),
+            ))
+        };
+
+        if let Some(offset) = forced_offset {
             lightbox.scroll_offset = offset;
         }
 
@@ -3973,7 +4026,7 @@ impl MarkdownApp {
 
                 // Set the pre-computed offset so ScrollArea renders at the
                 // correct position on this frame (avoids one-frame lag).
-                if let Some(offset) = pre_offset {
+                if let Some(offset) = forced_offset {
                     scroll_area = scroll_area
                         .horizontal_scroll_offset(offset.x)
                         .vertical_scroll_offset(offset.y);
@@ -4011,7 +4064,7 @@ impl MarkdownApp {
                 });
 
                 // Sync tracking: captures drag-to-scroll changes on non-zoom frames
-                if pre_offset.is_none() {
+                if forced_offset.is_none() {
                     lightbox.scroll_offset = scroll_output.state.offset;
                 }
             });
@@ -4041,20 +4094,43 @@ impl MarkdownApp {
                 }
             });
 
-        // 6. Zoom indicator (bottom-center) when zoom ≠ 100%
+        // 6. Zoom indicator (bottom-center) when zoom ≠ 100%. Like the top-bar
+        // readouts, clicking it resets to 100%.
         let zoom_pct = (lightbox.zoom * 100.0).round() as i32;
+        let mut reset_lightbox_zoom = false;
         if zoom_pct != 100 {
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("lightbox_zoom_indicator").with(oid),
-            ))
-            .text(
-                egui::pos2(screen_rect.center().x, screen_rect.bottom() - 24.0),
-                egui::Align2::CENTER_CENTER,
-                format!("{zoom_pct}%"),
-                egui::FontId::proportional(16.0),
-                egui::Color32::from_gray(180),
-            );
+            egui::Area::new(egui::Id::new("lightbox_zoom_indicator").with(oid))
+                .order(egui::Order::Tooltip)
+                .movable(false)
+                .fixed_pos(egui::pos2(
+                    screen_rect.center().x - 40.0,
+                    screen_rect.bottom() - 36.0,
+                ))
+                .show(ctx, |ui| {
+                    ui.set_min_width(80.0);
+                    ui.vertical_centered(|ui| {
+                        let label = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{zoom_pct}%"))
+                                    .size(16.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if label.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if label.on_hover_text("Click to reset zoom to 100%").clicked() {
+                            reset_lightbox_zoom = true;
+                        }
+                    });
+                });
+        }
+        if reset_lightbox_zoom {
+            if let Some(lb) = &mut self.lightbox {
+                lb.zoom = 1.0;
+                lb.scroll_offset = egui::Vec2::ZERO;
+            }
         }
 
         // 7. Escape to close
@@ -4180,14 +4256,35 @@ impl eframe::App for MarkdownApp {
             self.middle_pan_active = false;
         }
 
-        // When lightbox is open, intercept scroll/gesture events before they reach
-        // InputState. This prevents the document viewer underneath the overlay
-        // from reacting to the gesture while the lightbox consumes its wheel zoom.
-        self.lightbox_scroll = 0.0;
+        // When the lightbox is open it takes over wheel and gesture input, and
+        // those events are stripped so the document viewer underneath the
+        // overlay does not react to them as well.
+        //
+        // Wheel unit is what separates a mouse from a touchpad: winit reports a
+        // mouse wheel in `Line` units and a touchpad swipe in `Point` units. So
+        // a wheel notch zooms the image, while a two-finger swipe pans it —
+        // matching what an image viewer does. Pinch and Ctrl+wheel zoom through
+        // `pending_viewer_zoom`, which the lightbox consumes while it is open.
+        self.lightbox_wheel_notches = 0.0;
+        self.lightbox_pan = egui::Vec2::ZERO;
         if self.lightbox.is_some() {
             for event in &raw_input.events {
-                if let egui::Event::MouseWheel { delta, .. } = event {
-                    self.lightbox_scroll += delta.y;
+                let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } = event
+                else {
+                    continue;
+                };
+                if modifiers.matches_any(egui::Modifiers::COMMAND) {
+                    continue; // already folded into `pending_viewer_zoom`
+                }
+                match unit {
+                    egui::MouseWheelUnit::Point => self.lightbox_pan += *delta,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
+                        self.lightbox_wheel_notches += delta.y;
+                    }
                 }
             }
             raw_input
@@ -4867,27 +4964,41 @@ impl eframe::App for MarkdownApp {
 
                 // Show status on the right
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Show app scaling and viewer zoom if not at 100%.
+                    // Show app scaling and viewer zoom if not at 100%. Each
+                    // readout doubles as its own reset button — it is only
+                    // visible when off 100%, which is exactly when a reset is
+                    // worth offering.
                     if (self.scaling - 1.0).abs() > 0.01 {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Scale {}%",
-                                (self.scaling * 100.0).round() as i32
-                            ))
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
+                        let label = zoom_readout(
+                            ui,
+                            &format!("Scale {}%", (self.scaling * 100.0).round() as i32),
+                            "Click to reset app scaling to 100%",
                         );
+                        #[cfg(feature = "mcp")]
+                        self.mcp_bridge
+                            .register_widget("Reset Scaling", "button", &label, None);
+                        if label.clicked() {
+                            self.scaling = 1.0;
+                        }
                         ui.separator();
                     }
                     if (self.viewer_zoom - 1.0).abs() > 0.01 {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Viewer {}%",
-                                (self.viewer_zoom * 100.0).round() as i32
-                            ))
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
+                        let label = zoom_readout(
+                            ui,
+                            &format!("Viewer {}%", (self.viewer_zoom * 100.0).round() as i32),
+                            "Click to reset viewer zoom to 100%",
                         );
+                        #[cfg(feature = "mcp")]
+                        self.mcp_bridge.register_widget(
+                            "Reset Viewer Zoom",
+                            "button",
+                            &label,
+                            None,
+                        );
+                        if label.clicked() {
+                            self.viewer_zoom = 1.0;
+                            self.viewer_zoom_target = 1.0;
+                        }
                         ui.separator();
                     }
 

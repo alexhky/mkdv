@@ -27,6 +27,8 @@ handle over the viewer.
 - [x] Middle-button drag pans without selecting text
 - [x] Ctrl+Scroll zoom no longer also scrolls the document
 - [x] Zoom snapped to a ladder so pinch replays cached layout/glyph levels
+- [x] Click the zoom/scale readout to reset it to 100%
+- [x] Lightbox gestures: wheel zooms, two-finger swipe pans, pinch zooms
 
 ## Key Discoveries
 
@@ -94,6 +96,14 @@ middle button, and no widget-level flag disables it. The only reliable fix is to
 remove the middle press/release pair from `RawInput` before `InputState` sees it
 and track the button ourselves.
 
+### Wheel unit is the only mouse-vs-touchpad signal available
+
+winit reports a mouse wheel in `MouseWheelUnit::Line` and a touchpad swipe in
+`MouseWheelUnit::Point`. That is what lets the lightbox give the two devices
+different meanings — a wheel notch zooms, a two-finger swipe pans — without
+asking the platform what kind of pointing device is attached. The same
+distinction is what made the scroll-speed regression device-specific.
+
 ### Smooth pinch needs a zoom ladder
 
 Every distinct zoom re-wraps the document *and* makes egui rasterize a fresh
@@ -152,6 +162,9 @@ Confirmed interactively on GNOME/Wayland:
   ships at `2.0`
 - Middle-drag pans with no text selection; middle-click still closes tabs and
   opens explorer files
+- Clicking the top-bar zoom readout and the lightbox zoom percentage resets to
+  100%
+- In an opened image: two-finger swipe pans, pinch zooms, wheel zooms
 
 49 unit tests pass, including new coverage of the zoom ladder.
 
