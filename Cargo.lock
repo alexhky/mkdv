@@ -1587,6 +1587,7 @@ dependencies = [
  "mitex",
  "pulldown-cmark 0.13.0",
  "resvg",
+ "roughr-merman",
  "syntect",
  "typst",
  "typst-as-lib",

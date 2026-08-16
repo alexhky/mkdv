@@ -409,6 +409,41 @@ let target_path = target_path.canonicalize()?;  // Resolves ../
 
 ---
 
+### A transitive dep can break a fresh resolve while the lockfile still builds
+**Symptom:** `cargo install --path .` failed with 12 errors in `merman-render`
+(`no method named seed on OptionsBuilder`, `mismatched types` in
+`points_on_path`), while `cargo build` and `cargo install --locked` succeeded.
+
+**Root cause:** `cargo install` ignores the committed `Cargo.lock` unless
+`--locked` is passed, so it re-resolves every dependency to the newest
+semver-compatible version. `merman-render 0.3.0` requires
+`roughr-merman ^0.12.0`, but 0.12.1 removed `OptionsBuilder::seed` and changed
+the `points_on_path` signature — a breaking change inside a patch release. The
+lockfile pinned 0.12.0; a fresh resolve picked 0.12.2 and broke. Every
+`merman-render` release up to 0.7.0 carries the same `^0.12.0` requirement, so
+upgrading merman does not avoid it.
+
+**Fix:** pin the offending crate in `egui_commonmark_backend`, as an optional
+dependency gated on the `mermaid` feature, so *any* resolve agrees with the
+lockfile:
+
+```toml
+roughr-merman = { version = "=0.12.0", optional = true }
+mermaid = ["dep:merman", "dep:resvg", "dep:roughr-merman"]
+```
+
+The crate is never imported — the entry exists purely to constrain resolution.
+
+**Lesson:** `--locked` hides this class of breakage rather than fixing it. When
+a build works locally but fails from a clean resolve, reproduce it in a throwaway
+crate with no lockfile (`cargo new` + `cargo add <dep>`), diff the two lockfiles
+to find the crate that moved, then pin it in a manifest so the constraint travels
+with the repo.
+
+**Files:** `crates/egui_commonmark/egui_commonmark_backend/Cargo.toml`
+
+---
+
 ## Typography Research
 
 ### WCAG 2.1 SC 1.4.12 line height requirement
