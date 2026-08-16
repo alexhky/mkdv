@@ -658,6 +658,18 @@ but `egui_commonmark_extended` does not have that feature
 **Fix:** Detect terminal launch, respawn the same executable with a hidden child marker (`--no-detach`) and null stdio, run Unix children in a new session with `setsid()`, then let the parent exit. Keep a documented `--foreground` flag so startup errors, logs, and scripts can still use blocking behavior. Insert the hidden marker before `--` so clap does not treat it as a positional file argument.
 **Files:** `src/main.rs`, `README.md`
 
+### A bare `Icon=` in a desktop entry is a theme lookup, not a file path
+**Context:** Giving the GNOME launcher entry a real icon instead of `application-x-executable`.
+**Problem:** Setting `Icon=mkdv` does nothing on its own. The name is resolved against the icon theme search path, so unless a matching file has been installed the launcher silently keeps its fallback icon — no error, no log line, nothing to debug.
+**Fix:** Write the icon in the same place that writes the entry:
+```
+$XDG_DATA_HOME/applications/mkdv.desktop
+$XDG_DATA_HOME/icons/hicolor/scalable/apps/mkdv.svg
+```
+An absolute `Icon=/path/to/mkdv.svg` also resolves and needs no second file, but it bakes a machine-specific path into an entry the app rewrites on every start.
+**Related:** the window/taskbar icon is a *separate* mechanism — `ViewportBuilder::with_icon` wants an `egui::IconData` RGBA buffer, so it needs a rasterized PNG even when the launcher gets an SVG.
+**Files:** `src/main.rs` (`install_desktop_entry`, `window_icon`), `data/mkdv.desktop`, `data/mkdv.svg`
+
 ### Pollinations.ai is the keyless image-gen fallback
 **Context:** Replacing a placeholder app icon without a Gemini/OpenAI API key
 **Problem:** The `gemini` CLI's OAuth-personal auth (free tier) only grants access to text models. Image-gen models (`gemini-3.1-flash-image-preview`, `gemini-2.5-flash-image`, etc.) return `ModelNotFoundError: Requested entity was not found` (HTTP 404). Setting `GEMINI_API_KEY` in `~/.gemini/.env` would fix it but requires user action.

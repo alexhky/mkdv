@@ -26,6 +26,13 @@ use egui_mcp_bridge::{McpBridge, McpUiExt};
 const APP_KEY: &str = "mkdv-state";
 const DESKTOP_ENTRY_TEMPLATE: &str = include_str!("../data/mkdv.desktop");
 
+/// Scalable launcher icon, installed under `hicolor` so `Icon=mkdv` resolves.
+const APP_ICON_SVG: &str = include_str!("../data/mkdv.svg");
+
+/// Rasterized icon for the window/taskbar, which needs pixels rather than SVG.
+/// Rendered from `data/mkdv.svg`; regenerate both together.
+const APP_ICON_PNG: &[u8] = include_bytes!("../data/mkdv-256.png");
+
 // Welcome page recent-files: how many to keep, and how many to show before "Show more".
 const RECENT_FILES_CAP: usize = 20;
 const RECENT_SHOWN: usize = 6;
@@ -1579,6 +1586,16 @@ fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
     let applications_dir = data_home.join("applications");
     fs::create_dir_all(&applications_dir)?;
 
+    // The entry says `Icon=mkdv`, so the icon has to be somewhere the theme
+    // lookup searches. A failure here is not fatal: the launcher still works,
+    // it just falls back to a generic icon.
+    let icons_dir = data_home.join("icons/hicolor/scalable/apps");
+    if let Err(err) = fs::create_dir_all(&icons_dir)
+        .and_then(|()| fs::write(icons_dir.join("mkdv.svg"), APP_ICON_SVG))
+    {
+        log::warn!("Could not install the launcher icon: {err}");
+    }
+
     let executable = std::env::current_exe()?;
     let desktop_path = applications_dir.join("mkdv.desktop");
     fs::write(&desktop_path, desktop_entry_contents(&executable))?;
@@ -1588,6 +1605,21 @@ fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
 #[cfg(not(target_os = "linux"))]
 fn install_desktop_entry() -> io::Result<Option<PathBuf>> {
     Ok(None)
+}
+
+/// Decode the embedded PNG into the RGBA buffer `eframe` wants for the window
+/// icon. Returns `None` rather than failing startup over decoration.
+fn window_icon() -> Option<egui::IconData> {
+    let image = image::load_from_memory(APP_ICON_PNG)
+        .inspect_err(|err| log::warn!("Could not decode the window icon: {err}"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Some(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
 }
 
 fn main() -> eframe::Result<()> {
@@ -1624,8 +1656,13 @@ fn main() -> eframe::Result<()> {
     let optimal_width =
         CONTENT_OPTIMAL_WIDTH + EXPLORER_DEFAULT_WIDTH + OUTLINE_DEFAULT_WIDTH + PANEL_SEPARATORS;
 
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_inner_size([optimal_width, OPTIMAL_WINDOW_HEIGHT])
             .with_min_inner_size([400.0, 300.0])
             .with_title("Markdown Viewer")
@@ -5301,6 +5338,15 @@ mod tests {
         let contents = desktop_entry_contents(Path::new("/home/alice/.cargo/bin/mkdv"));
         assert!(contents.contains("Exec=\"/home/alice/.cargo/bin/mkdv\" %f"));
         assert!(contents.contains("StartupWMClass=mkdv"));
+        // The name the installed `hicolor/scalable/apps/mkdv.svg` resolves under.
+        assert!(contents.contains("Icon=mkdv"));
+    }
+
+    #[test]
+    fn window_icon_decodes_to_a_square_rgba_buffer() {
+        let icon = window_icon().expect("embedded PNG should decode");
+        assert_eq!(icon.width, icon.height);
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
     }
 
     #[test]

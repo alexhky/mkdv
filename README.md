@@ -167,7 +167,7 @@ On Linux, register the executable with the GNOME application launcher:
 mkdv --install-desktop
 ```
 
-The application also refreshes this entry automatically whenever it starts. It writes `mkdv.desktop` to `$XDG_DATA_HOME/applications` (or `~/.local/share/applications`) and records the absolute installed executable path, so GNOME can launch it even when it does not inherit the shell's `PATH`.
+The application also refreshes this entry automatically whenever it starts. It writes `mkdv.desktop` to `$XDG_DATA_HOME/applications` (or `~/.local/share/applications`) and records the absolute installed executable path, so GNOME can launch it even when it does not inherit the shell's `PATH`. The launcher icon is installed alongside it, to `$XDG_DATA_HOME/icons/hicolor/scalable/apps/mkdv.svg`.
 
 ### From Source
 
