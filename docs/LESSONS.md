@@ -444,6 +444,51 @@ with the repo.
 
 ---
 
+### Upgrading a dependency can break a workaround without breaking the build
+**Context:** merman 0.3 → 0.7 (`docs/devlog/051-merman-0.7-upgrade.md`)
+
+We carried four post-processing passes over merman's SVG output. The upgrade
+compiled cleanly and every test passed, yet two of the four were now wrong:
+
+- `fix_double_escaped_xml_entities()` undid escaping merman 0.3 applied twice.
+  0.7 fixed that upstream, so the pass had inverted meaning — it would have
+  turned a correct `&amp;` into a bare `&` and produced invalid XML.
+- `sanitize_svg_font_family()` skipped a CSS value up to the next `;`. 0.7
+  started quoting font names as `&quot;`, whose own `;` came first, so the scan
+  stopped mid-entity and left the old value in the output.
+
+Neither failure is visible to the compiler or to a "does it render" check. Both
+were found by diffing the *raw SVG* of both versions for the exact markers each
+workaround keys on, before touching any code.
+
+**Lesson:** a workaround is a claim about a dependency's behaviour, and an
+upgrade invalidates the claim silently. When bumping a dependency you have
+hacks around, list the hacks first, then verify each one's trigger condition
+against the new output — do not assume a green build means they still apply.
+Delete the ones the upgrade made obsolete rather than leaving them as no-ops.
+
+**Files:** `crates/egui_commonmark/egui_commonmark_backend/src/misc.rs`
+
+---
+
+### Do not run `cargo fmt --all` inside `crates/egui_commonmark`
+**Symptom:** formatting the vendored fork rewrote `use` blocks in eight files
+that had no other changes (~350 lines of churn), reordering imports from
+`RenderHtmlFn, alerts, misc` to `alerts, misc, RenderHtmlFn`.
+
+**Root cause:** the nested workspace has its own `rust-toolchain` pinning 1.88,
+whose rustfmt uses the pre-2024 import-ordering style. The fork's committed
+files were formatted with the newer default toolchain, so the pinned rustfmt
+"fixes" all of them.
+
+**Fix:** format only the root workspace (`cargo fmt`). Edit the vendored crate
+by hand and keep its existing style; the root `cargo fmt --check` gate does not
+cover it.
+
+**Files:** `crates/egui_commonmark/rust-toolchain`
+
+---
+
 ## Typography Research
 
 ### WCAG 2.1 SC 1.4.12 line height requirement

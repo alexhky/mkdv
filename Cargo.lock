@@ -230,7 +230,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -241,7 +241,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1346,7 +1346,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1436,24 +1436,27 @@ dependencies = [
 
 [[package]]
 name = "dugong"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f556979da2846f6d06c65845edd1fa8493a2ede41bdb9cf1f86c4863bf9014f"
+checksum = "8182775cd5c441f69e5be06b29f1452503568c4270168cef67a557cd8fbcaba0"
 dependencies = [
  "dugong-graphlib",
  "rustc-hash 2.1.1",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
 name = "dugong-graphlib"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acb5f0d6bce4db8166f3c6beeae7d785061c3b7b7758ed8106ab0bd5c725f26c"
+checksum = "faffb9e2480ff1c6901e6376f143614df5331052e60e0dd5086f12399a18c61d"
 dependencies = [
  "hashbrown 0.16.1",
  "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1848,7 +1851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3338,14 +3341,15 @@ dependencies = [
 
 [[package]]
 name = "manatee"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5580c9d30889244c7f243a08875caf2df57fc5b47a1fad75fa9f55b571e5e8d6"
+checksum = "85f575aa9013f7fc6f6804dcc8fc47299ee61692c2a7cb017573dc5f3a85a5a4"
 dependencies = [
  "indexmap",
  "nalgebra",
  "rustc-hash 2.1.1",
  "thiserror 2.0.18",
+ "web-time",
 ]
 
 [[package]]
@@ -3384,10 +3388,11 @@ dependencies = [
 
 [[package]]
 name = "merman"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6a65ee6f8257b6f574f50daff0a5bbecb6f45161d7c33f01840a86fe0f47dd1"
+checksum = "316af7de4c273fb450fa7db94441df29bd09d5dcc5fd7f31f946766dea7272b3"
 dependencies = [
+ "chrono",
  "merman-core",
  "merman-render",
  "thiserror 2.0.18",
@@ -3395,9 +3400,9 @@ dependencies = [
 
 [[package]]
 name = "merman-core"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1674ddf393f80c1a495066493753b6addb2de3fbd6cf913db747042c60f7290c"
+checksum = "4b7ca468603ca22bad2578b3d3fbc0b436e28b5ccb726e2cf99d7bb75fa8c167"
 dependencies = [
  "chrono",
  "euclid",
@@ -3418,13 +3423,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "web-time",
 ]
 
 [[package]]
 name = "merman-render"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dca3da9cf1f29f8811705b4f0877d1f11cf3d1ea9ac31dc3dd8d01cb6941839e"
+checksum = "46cda864705a73dd80ec8985463d4bf735e991954d5bf63ca5604bf59287582a"
 dependencies = [
  "base64",
  "chrono",
@@ -3433,7 +3439,6 @@ dependencies = [
  "manatee",
  "merman-core",
  "pulldown-cmark 0.12.2",
- "regex",
  "roughr-merman",
  "rustc-hash 2.1.1",
  "ryu-js",
@@ -3443,6 +3448,7 @@ dependencies = [
  "thiserror 2.0.18",
  "unicode-width",
  "url",
+ "web-time",
 ]
 
 [[package]]
@@ -5074,7 +5080,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5662,7 +5668,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7022,7 +7028,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

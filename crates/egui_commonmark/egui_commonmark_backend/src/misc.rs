@@ -657,19 +657,6 @@ static MERMAID_FONTDB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::
 });
 
 #[cfg(feature = "mermaid")]
-fn fix_double_escaped_xml_entities(svg: &str) -> String {
-    // merman's escape_xml_text double-escapes text that mermaid has already
-    // entity-escaped for HTML foreignObject content.
-    // e.g. "a > b" → mermaid "a &gt; b" → escape_xml_text "a &amp;gt; b"
-    // Fix: revert the second escaping so resvg renders the intended character.
-    svg.replace("&amp;lt;", "&lt;")
-        .replace("&amp;gt;", "&gt;")
-        .replace("&amp;amp;", "&amp;")
-        .replace("&amp;quot;", "&quot;")
-        .replace("&amp;apos;", "&apos;")
-}
-
-#[cfg(feature = "mermaid")]
 fn rasterize_mermaid_svg(svg_bytes: &[u8]) -> Option<(egui::ColorImage, egui::Vec2)> {
     let opts = resvg::usvg::Options {
         fontdb: Arc::clone(&MERMAID_FONTDB),
@@ -839,10 +826,8 @@ impl CodeBlock {
         std::thread::spawn(move || {
             let result = match renderer.render_svg_readable_sync(&content) {
                 Ok(Some(svg_string)) => {
-                    let svg_string = fix_double_escaped_xml_entities(&svg_string);
                     let svg_string = CodeBlock::sanitize_svg_font_family(&svg_string);
                     let svg_string = CodeBlock::strip_stroke_text(&svg_string);
-                    let svg_string = CodeBlock::wrap_fallback_text(&svg_string);
                     let svg_bytes = svg_string.into_bytes();
 
                     match rasterize_mermaid_svg(&svg_bytes) {
@@ -902,14 +887,16 @@ impl CodeBlock {
                 // CSS property: font-family: ...; or font-family:...;
                 result.push_str("font-family: ");
                 result.push_str(safe_css);
-                // Skip colon, optional whitespace, and value until ; or }
+                // Skip colon, optional whitespace, and value until ; or }.
+                // merman quotes font names as `&quot;`, so a plain search for `;`
+                // would stop inside that entity and leave the rest of the old
+                // value in the output — skip over entity references instead.
                 let after_colon = &after[1..];
                 let trimmed = after_colon.trim_start();
-                if let Some(end) = trimmed.find(|c: char| c == ';' || c == '}') {
-                    remaining = &trimmed[end..];
-                } else {
-                    remaining = "";
-                }
+                remaining = match Self::find_css_value_end(trimmed) {
+                    Some(end) => &trimmed[end..],
+                    None => "",
+                };
             } else {
                 // Not a font-family declaration we recognize
                 result.push_str("font-family");
@@ -928,6 +915,28 @@ impl CodeBlock {
         }
 
         result
+    }
+
+    /// Find the byte offset that terminates a CSS declaration value (`;` or
+    /// `}`), skipping over XML entity references such as `&quot;` whose own
+    /// trailing `;` must not be mistaken for the terminator.
+    fn find_css_value_end(value: &str) -> Option<usize> {
+        let bytes = value.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b';' | b'}' => return Some(i),
+                b'&' => {
+                    // Skip the entity, including its terminating `;`.
+                    match value[i + 1..].find(';') {
+                        Some(rel) => i += rel + 2,
+                        None => i += 1,
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        None
     }
 
     /// Remove stroke-outline `<text>` elements from fallback groups.
@@ -964,178 +973,6 @@ impl CodeBlock {
         }
         result.push_str(remaining);
         result
-    }
-
-    /// Word-wrap long fallback text in merman's readable SVG output.
-    /// merman places all node label text on a single line in the fallback `<text>` elements,
-    /// but the node rects are sized for wrapped text. This causes overflow when text is long.
-    /// We split long labels into multiple `<tspan>` lines to fit within nodes.
-    fn wrap_fallback_text(svg: &str) -> String {
-        const FALLBACK_MARKER: &str = "data-merman-foreignobject=\"fallback\"";
-        if !svg.contains(FALLBACK_MARKER) {
-            return svg.to_owned();
-        }
-
-        // Average char width at 16px for Noto Sans ≈ 8.5px; node rects cap at ~260px
-        // Use ~28 chars as the wrap threshold
-        const MAX_CHARS: usize = 28;
-
-        let mut result = String::with_capacity(svg.len() + 512);
-        let mut remaining = svg;
-
-        while let Some(marker_pos) = remaining.find(FALLBACK_MARKER) {
-            // Find the <g that starts this fallback group
-            let g_start = remaining[..marker_pos].rfind('<').unwrap_or(marker_pos);
-            // Copy everything before this group
-            result.push_str(&remaining[..g_start]);
-
-            // Find </g> end
-            let after_marker = &remaining[marker_pos..];
-            if let Some(g_end_rel) = after_marker.find("</g>") {
-                let g_end = marker_pos + g_end_rel + 4;
-                let group = &remaining[g_start..g_end];
-
-                // Process: find <tspan ...>TEXT</tspan> patterns and wrap long ones
-                let processed = Self::wrap_tspans_in_group(group, MAX_CHARS);
-                result.push_str(&processed);
-
-                remaining = &remaining[g_end..];
-            } else {
-                result.push_str(&remaining[g_start..]);
-                remaining = "";
-            }
-        }
-        result.push_str(remaining);
-        result
-    }
-
-    /// Process a single fallback `<g>` group: wrap long tspan text, then
-    /// recalculate all dy values so visual lines are evenly spaced and centered.
-    ///
-    /// Each visual line is emitted as its own `<text>` element with a single
-    /// `<tspan dy="...">` so that dy is always relative to the text element's
-    /// base y (not to a previous tspan).
-    fn wrap_tspans_in_group(group: &str, max_chars: usize) -> String {
-        const LINE_SPACING: f32 = 16.0; // matches font-size 16px
-
-        // --- Pass 1: collect <text> elements and wrap their tspan content ---
-
-        // We need: the open tag template (for style/attrs), x value, and visual lines.
-        let mut open_tag_template = String::new();
-        let mut x_val = String::new();
-        let mut all_visual_lines: Vec<String> = Vec::new();
-
-        let mut remaining = group;
-
-        // Prefix: everything before the first <text
-        let prefix = if let Some(pos) = remaining.find("<text") {
-            let p = remaining[..pos].to_string();
-            remaining = &remaining[pos..];
-            p
-        } else {
-            return group.to_owned();
-        };
-
-        while let Some(text_start) = remaining.find("<text") {
-            let text_rest = &remaining[text_start..];
-            let Some(open_end) = text_rest.find('>') else { break };
-
-            // Capture the first <text ...> tag as template (all share same attrs)
-            if open_tag_template.is_empty() {
-                open_tag_template = text_rest[..=open_end].to_string();
-            }
-
-            let inner = &text_rest[open_end + 1..];
-            let Some(close_pos) = inner.find("</text>") else { break };
-            let inner_content = &inner[..close_pos];
-
-            // Extract tspan content
-            let mut tspan_remaining = inner_content;
-            while let Some(ts) = tspan_remaining.find("<tspan") {
-                let ts_rest = &tspan_remaining[ts..];
-                let Some(ts_close) = ts_rest.find("</tspan>") else { break };
-                let full_tspan = &ts_rest[..ts_close + 8];
-
-                if x_val.is_empty() {
-                    x_val = Self::extract_attr(full_tspan, "x").to_string();
-                }
-
-                let content_start = full_tspan.find('>').map(|p| p + 1).unwrap_or(0);
-                let content = &full_tspan[content_start..ts_close];
-
-                if content.trim().len() > max_chars {
-                    all_visual_lines.extend(Self::word_wrap(content.trim(), max_chars));
-                } else {
-                    all_visual_lines.push(content.to_string());
-                }
-
-                tspan_remaining = &ts_rest[ts_close + 8..];
-            }
-
-            // Advance past </text>
-            remaining = &remaining[text_start + open_end + 1 + close_pos + 7..];
-        }
-
-        let suffix = remaining;
-
-        if all_visual_lines.is_empty() {
-            return group.to_owned();
-        }
-
-        // --- Pass 2: emit one <text> per visual line with centered dy ---
-        let total = all_visual_lines.len();
-        let mut result = String::with_capacity(group.len() + 512);
-        result.push_str(&prefix);
-
-        for (i, line) in all_visual_lines.iter().enumerate() {
-            let dy = if total <= 1 {
-                0.0
-            } else {
-                -(total as f32 - 1.0) * LINE_SPACING * 0.5 + i as f32 * LINE_SPACING
-            };
-            result.push_str(&open_tag_template);
-            result.push_str(&format!(
-                "<tspan x=\"{}\" dy=\"{}\">{}</tspan></text>",
-                x_val, dy, line
-            ));
-        }
-
-        result.push_str(suffix);
-        result
-    }
-
-    /// Extract an XML attribute value by name.
-    fn extract_attr<'a>(tag: &'a str, name: &str) -> &'a str {
-        let needle = format!("{}=\"", name);
-        if let Some(start) = tag.find(&needle) {
-            let val = &tag[start + needle.len()..];
-            if let Some(end) = val.find('"') {
-                return &val[..end];
-            }
-        }
-        ""
-    }
-
-    /// Word-wrap text at word boundaries, keeping lines under max_chars.
-    fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
-        let mut lines = Vec::new();
-        let mut current_line = String::new();
-
-        for word in text.split_whitespace() {
-            if current_line.is_empty() {
-                current_line = word.to_string();
-            } else if current_line.len() + 1 + word.len() <= max_chars {
-                current_line.push(' ');
-                current_line.push_str(word);
-            } else {
-                lines.push(std::mem::take(&mut current_line));
-                current_line = word.to_string();
-            }
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-        lines
     }
 }
 
@@ -2223,4 +2060,44 @@ pub fn prepare_show(cache: &mut CommonMarkCache, ctx: &egui::Context) {
     }
 
     cache.deactivate_link_hooks();
+}
+
+#[cfg(all(test, feature = "mermaid"))]
+mod mermaid_tests {
+    use super::CodeBlock;
+
+    /// merman 0.7 quotes font names as `&quot;`. The entity's own `;` must not
+    /// be mistaken for the end of the CSS declaration.
+    #[test]
+    fn sanitizes_font_family_with_quoted_entities() {
+        let svg = concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text style="text-anchor: middle; "#,
+            r#"font-size: 16px; font-family: &quot;trebuchet ms&quot;,verdana,arial,sans-serif;">Hi</text></svg>"#
+        );
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        assert!(!out.contains("trebuchet"), "old font value survived: {out}");
+        assert!(!out.contains("verdana"), "old font value survived: {out}");
+        assert!(out.contains("'DejaVu Sans'"));
+        assert!(out.contains(">Hi</text>"), "markup was corrupted: {out}");
+    }
+
+    #[test]
+    fn sanitizes_font_family_attribute_form() {
+        let svg =
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text font-family="Arial">Hi</text></svg>"#;
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        assert!(!out.contains("Arial"));
+        assert!(out.contains("DejaVu Sans"));
+        assert!(out.contains(">Hi</text>"));
+    }
+
+    /// merman 0.7 emits singly-escaped entities, so the text must pass through
+    /// untouched now that the double-unescape workaround is gone.
+    #[test]
+    fn preserves_single_escaped_entities() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><text>A &amp; B &lt; C</text></svg>"#;
+        let out = CodeBlock::sanitize_svg_font_family(svg);
+        let out = CodeBlock::strip_stroke_text(&out);
+        assert!(out.contains("A &amp; B &lt; C"), "entities changed: {out}");
+    }
 }
